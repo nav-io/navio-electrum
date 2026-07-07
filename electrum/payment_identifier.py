@@ -109,7 +109,7 @@ class FieldsForGUI(NamedTuple):
 class PaymentIdentifier(Logger):
     """
     Takes:
-        * bitcoin addresses or script
+        * navio addresses or script
         * paytomany csv
         * openalias
         * bip21 URI

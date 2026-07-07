@@ -95,9 +95,9 @@ def all_subclasses(cls) -> Set:
 ca_path = certifi.where()
 
 
-base_units = {'BTC':8, 'mBTC':5, 'bits':2, 'sat':0}
+base_units = {'NAV':8, 'mNAV':5, 'bits':2, 'sat':0}
 base_units_inverse = inv_dict(base_units)
-base_units_list = ['BTC', 'mBTC', 'bits', 'sat']  # list(dict) does not guarantee order
+base_units_list = ['NAV', 'mNAV', 'bits', 'sat']  # list(dict) does not guarantee order
 
 DECIMAL_POINT_DEFAULT = 5  # mBTC
 
@@ -106,7 +106,7 @@ class UnknownBaseUnit(Exception): pass
 
 
 def decimal_point_to_base_unit_name(dp: int) -> str:
-    # e.g. 8 -> "BTC"
+    # e.g. 8 -> "NAV"
     try:
         return base_units_inverse[dp]
     except KeyError:
@@ -115,7 +115,7 @@ def decimal_point_to_base_unit_name(dp: int) -> str:
 
 def base_unit_name_to_decimal_point(unit_name: str) -> int:
     """Returns the max number of digits allowed after the decimal point."""
-    # e.g. "BTC" -> 8
+    # e.g. "NAV" -> 8
     try:
         return base_units[unit_name]
     except KeyError:
@@ -685,11 +685,11 @@ def user_dir():
     elif 'ANDROID_DATA' in os.environ:
         return android_data_dir()
     elif os.name == 'posix':
-        return os.path.join(os.environ["HOME"], ".electrum")
+        return os.path.join(os.environ["HOME"], ".navio-electrum")
     elif "APPDATA" in os.environ:
-        return os.path.join(os.environ["APPDATA"], "Electrum")
+        return os.path.join(os.environ["APPDATA"], "NavioElectrum")
     elif "LOCALAPPDATA" in os.environ:
-        return os.path.join(os.environ["LOCALAPPDATA"], "Electrum")
+        return os.path.join(os.environ["LOCALAPPDATA"], "NavioElectrum")
     else:
         #raise Exception("No home directory found in environment variables.")
         return

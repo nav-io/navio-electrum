@@ -10,7 +10,7 @@ from .bitcoin import COIN, TOTAL_COIN_SUPPLY_LIMIT_IN_BTC
 from .bolt11 import decode_bolt11_invoice, BOLT11DecodeException
 
 # note: when checking against these, use .lower() to support case-insensitivity
-BITCOIN_BIP21_URI_SCHEME = 'bitcoin'
+BITCOIN_BIP21_URI_SCHEME = 'navio'
 LIGHTNING_URI_SCHEME = 'lightning'
 
 # note: URI scheme handler registrations are duplicated all over the codebase:

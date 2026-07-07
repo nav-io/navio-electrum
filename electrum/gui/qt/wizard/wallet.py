@@ -100,6 +100,9 @@ class QENewWalletWizard(NewWalletWizard, QEAbstractWizard, MessageBoxMixin):
             'wallet_name': {'gui': WCWalletName},
             'hw_unlock': {'gui': WCChooseHWDevice},
             'wallet_type': {'gui': WCWalletType},
+            'blsct_create_seed': {'gui': WCBlsctCreateSeed},
+            'blsct_confirm_seed': {'gui': WCBlsctConfirmSeed},
+            'blsct_have_seed': {'gui': WCBlsctHaveSeed},
             'keystore_type': {'gui': WCKeystoreType},
             'create_seed': {'gui': WCCreateSeed},
             'create_ext': {'gui': WCEnterExt},
@@ -390,14 +393,12 @@ class WCWalletType(WalletWizardComponent):
         WalletWizardComponent.__init__(self, parent, wizard, title=_('Create new wallet'))
         message = _('What kind of wallet do you want to create?')
         wallet_kinds = [
-            ChoiceItem(key='standard', label=_('Standard wallet')),
-            ChoiceItem(key='2fa', label=_('Wallet with two-factor authentication')),
-            ChoiceItem(key='multisig', label=_('Multi-signature wallet')),
-            ChoiceItem(key='imported', label=_('Import Bitcoin addresses or private keys')),
+            ChoiceItem(key='blsct', label=_('Navio wallet (new seed)')),
+            ChoiceItem(key='blsct_restore', label=_('Restore Navio wallet from seed')),
         ]
-        choices = [c for c in wallet_kinds if c.key in wallet_types]
+        choices = wallet_kinds
 
-        self.choice_w = ChoiceWidget(message=message, choices=choices, default_key='standard')
+        self.choice_w = ChoiceWidget(message=message, choices=choices, default_key='blsct')
         self.layout().addWidget(self.choice_w)
         self.layout().addStretch(1)
         self._valid = True
@@ -507,6 +508,89 @@ class WCConfirmSeed(WalletWizardComponent):
 
     def apply(self):
         pass
+
+
+class WCBlsctCreateSeed(WalletWizardComponent):
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(self, parent, wizard, title=_('Wallet Seed'))
+        self._busy = True
+        self.seed_widget = None
+        self.seed = None
+
+    def on_ready(self):
+        QTimer.singleShot(1, self.create_seed)
+
+    def apply(self):
+        if self.seed_widget:
+            self.wizard_data['seed'] = self.seed
+            self.wizard_data['seed_type'] = 'blsct'
+            self.wizard_data['seed_extend'] = False
+            self.wizard_data['seed_variant'] = 'bip39'
+
+    def create_seed(self):
+        self.busy = True
+        import os
+        from electrum.navio_blsct import bip39_entropy_to_mnemonic
+        self.seed = bip39_entropy_to_mnemonic(os.urandom(32))
+        self.seed_widget = SeedWidget(
+            title=_('Your wallet generation seed is:'),
+            seed=self.seed,
+            options=[],
+            msg=True,
+            parent=self,
+            config=self.wizard.config,
+        )
+        self.layout().addWidget(self.seed_widget)
+        self.layout().addStretch(1)
+        self.busy = False
+        self.valid = True
+
+
+class WCBlsctConfirmSeed(WalletWizardComponent):
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(self, parent, wizard, title=_('Confirm Seed'))
+        message = ' '.join([
+            _('Your seed is important!'),
+            _('If you lose your seed, your money will be permanently lost.'),
+            _('To make sure that you have properly saved your seed, please retype it here.')
+        ])
+        self.layout().addWidget(WWLabel(message))
+        self.seed_widget = SeedWidget(
+            is_seed=lambda x: ' '.join(x.split()) == self.wizard_data['seed'],
+            config=self.wizard.config,
+        )
+        self.seed_widget.validChanged.connect(lambda valid: setattr(self, 'valid', valid))
+        self.layout().addWidget(self.seed_widget)
+        wizard.app.clipboard().clear()
+
+    def apply(self):
+        pass
+
+
+class WCBlsctHaveSeed(WalletWizardComponent):
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(self, parent, wizard, title=_('Enter Seed'))
+        self.layout().addWidget(WWLabel(_('Enter your 24-word Navio seed phrase (or 64-character hex seed).')))
+
+        def is_valid(text):
+            from electrum.navio_blsct import is_bip39_mnemonic
+            text = text.strip()
+            if len(text) == 64 and all(c in '0123456789abcdefABCDEF' for c in text):
+                return True
+            return is_bip39_mnemonic(' '.join(text.split()))
+
+        self.seed_widget = SeedWidget(
+            is_seed=is_valid,
+            config=self.wizard.config,
+        )
+        self.seed_widget.validChanged.connect(lambda valid: setattr(self, 'valid', valid))
+        self.layout().addWidget(self.seed_widget)
+
+    def apply(self):
+        self.wizard_data['seed'] = ' '.join(self.seed_widget.get_seed_words())
+        self.wizard_data['seed_type'] = 'blsct'
+        self.wizard_data['seed_extend'] = False
+        self.wizard_data['seed_variant'] = 'bip39'
 
 
 class WCEnterExt(WalletWizardComponent, Logger):
@@ -964,7 +1048,7 @@ class WCImport(WalletWizardComponent):
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(self, parent, wizard, title=_('Import Bitcoin Addresses or Private Keys'))
         message = _(
-            'Enter a list of Bitcoin addresses (this will create a watching-only wallet), or a list of private keys.')
+            'Enter a list of Navio addresses (this will create a watching-only wallet), or a list of private keys.')
         header_layout = QHBoxLayout()
         label = WWLabel(message)
         label.setMinimumWidth(400)

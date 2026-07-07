@@ -101,7 +101,7 @@ class Contacts(dict, Logger):
                 }
         if openalias := await self.resolve_openalias(k):
             return openalias
-        raise AliasNotFoundException("Invalid Bitcoin address or alias", k)
+        raise AliasNotFoundException("Invalid Navio address or alias", k)
 
     @classmethod
     async def resolve_openalias(cls, url: str) -> Dict[str, Any]:
