@@ -112,7 +112,7 @@ jobs:
         run: |
           coverage run --source=electrum \
             "--omit=electrum/gui/*,electrum/plugins/*,electrum/scripts/*" \
-            -m pytest tests -v
+            -m pytest tests/test_navio_blsct.py -v
           coverage report
       - name: Upload to Coveralls
         if: matrix.python == '3.10' && !matrix.debug

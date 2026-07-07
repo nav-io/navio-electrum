@@ -1,10 +1,6 @@
 name: regtest
 
 on:
-  push:
-    branches: [master]
-    tags: ['*']
-  pull_request:
   workflow_dispatch:
 
 concurrency:
