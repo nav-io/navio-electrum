@@ -310,7 +310,10 @@ class Blockchain(Logger):
             raise InvalidHeader("hash mismatches with expected: {} vs {}".format(expected_header_hash, _hash))
         if prev_hash != header.get('prev_block_hash'):
             raise InvalidHeader("prev hash mismatch: %s vs %s" % (prev_hash, header.get('prev_block_hash')))
-        if constants.net.TESTNET:
+        # Navio is proof-of-stake: per-block difficulty cannot be recomputed
+        # client-side, so bits/PoW checks are skipped (header-chain linkage
+        # and server consensus are still verified).
+        if constants.net.TESTNET or getattr(constants.net, 'DISABLE_POW_CHECK', False):
             return
         bits = cls.target_to_bits(target)
         if bits != header.get('bits'):
@@ -531,7 +534,7 @@ class Blockchain(Logger):
 
     def get_target(self, index: int) -> int:
         # compute target from chunk x, used in chunk x+1
-        if constants.net.TESTNET:
+        if constants.net.TESTNET or getattr(constants.net, 'DISABLE_POW_CHECK', False):
             return 0
         if index == -1:
             return MAX_TARGET

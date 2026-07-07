@@ -413,6 +413,17 @@ class NewWalletWizard(KeystoreWizard):
             'wallet_type': {
                 'next': self.on_wallet_type
             },
+            'blsct_create_seed': {
+                'next': 'blsct_confirm_seed',
+            },
+            'blsct_confirm_seed': {
+                'next': 'wallet_password',
+                'last': lambda d: self.is_single_password(),
+            },
+            'blsct_have_seed': {
+                'next': 'wallet_password',
+                'last': lambda d: self.is_single_password(),
+            },
             'keystore_type': {
                 'next': self.on_keystore_type
             },
@@ -515,6 +526,8 @@ class NewWalletWizard(KeystoreWizard):
     def on_wallet_type(self, wizard_data: dict) -> str:
         t = wizard_data['wallet_type']
         return {
+            'blsct': 'blsct_create_seed',
+            'blsct_restore': 'blsct_have_seed',
             'standard': 'keystore_type',
             '2fa': 'trustedcoin_start',
             'multisig': 'multisig',
@@ -681,7 +694,35 @@ class NewWalletWizard(KeystoreWizard):
 
         return key_valid, validation_message
 
+    def _create_blsct_storage(self, path: str, data: dict):
+        from .blsct_wallet import BlsctKeyStore
+        from . import navio_blsct
+        if os.path.exists(path):
+            raise UserFacingException(_('File already exists at path: {}').format(path))
+        try:
+            storage = WalletStorage(path)
+        except StorageReadWriteError as e:
+            raise UserFacingException(e)
+        seed_text = ' '.join(data['seed'].split())
+        if len(seed_text) == 64 and all(c in '0123456789abcdefABCDEF' for c in seed_text):
+            k = BlsctKeyStore.from_seed_hex(seed_text.lower())
+        else:
+            k = BlsctKeyStore.from_mnemonic(seed_text)
+        password = data.get('password') or None
+        if data.get('encrypt') and password:
+            storage.set_password(password, enc_version=StorageEncryptionVersion.USER_PASSWORD)
+        db = WalletDB('', storage=storage, upgrade=True)
+        if password:
+            k.update_password(None, password)
+        db.put('keystore', k.dump())
+        db.put('wallet_type', 'blsct')
+        db.set_keystore_encryption(bool(password))
+        db.write()
+        return
+
     def create_storage(self, path: str, data: dict):
+        if data['wallet_type'] in ('blsct', 'blsct_restore'):
+            return self._create_blsct_storage(path, data)
         assert data['wallet_type'] in ['standard', '2fa', 'imported', 'multisig']
 
         if os.path.exists(path):

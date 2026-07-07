@@ -17,6 +17,7 @@ class GuiImportError(ImportError):
 from .version import ELECTRUM_VERSION
 from .util import format_satoshis
 from .wallet import Wallet
+from . import blsct_wallet  # registers the 'blsct' wallet type
 from .storage import WalletStorage
 from .coinchooser import COIN_CHOOSERS
 from .network import Network, pick_random_server

@@ -56,9 +56,9 @@ def create_fallback_node_list(fallback_nodes_dict: dict[str, dict]) -> List[LNPe
     return fallback_nodes
 
 
-GIT_REPO_URL = "https://github.com/spesmilo/electrum"
-GIT_REPO_ISSUES_URL = "https://github.com/spesmilo/electrum/issues"
-RELEASE_NOTES_URL = "https://raw.githubusercontent.com/spesmilo/electrum/refs/heads/master/RELEASE-NOTES"
+GIT_REPO_URL = "https://github.com/nav-io/navio-electrum"
+GIT_REPO_ISSUES_URL = "https://github.com/nav-io/navio-electrum/issues"
+RELEASE_NOTES_URL = "https://raw.githubusercontent.com/nav-io/navio-electrum/refs/heads/master/RELEASE-NOTES"
 BIP39_WALLET_FORMATS = read_json('bip39_wallet_formats.json')
 
 
@@ -70,6 +70,7 @@ class AbstractNet:
     ADDRTYPE_P2PKH: int
     ADDRTYPE_P2SH: int
     SEGWIT_HRP: str
+    BLSCT_HRP: str = "nav"
     BOLT11_HRP: str
     GENESIS: str
     BLOCK_HEIGHT_FIRST_LIGHTNING_CHANNELS: int = 0
@@ -147,13 +148,15 @@ class BitcoinMainnet(AbstractNet):
 
     NET_NAME = "mainnet"
     TESTNET = False
-    WIF_PREFIX = 0x80
-    ADDRTYPE_P2PKH = 0
-    ADDRTYPE_P2SH = 5
-    SEGWIT_HRP = "bc"
+    DISABLE_POW_CHECK = True  # Navio is PoS
+    WIF_PREFIX = 0x96
+    ADDRTYPE_P2PKH = 53
+    ADDRTYPE_P2SH = 85
+    SEGWIT_HRP = "nv"
+    BLSCT_HRP = "nav"
     BOLT11_HRP = SEGWIT_HRP
-    GENESIS = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
-    DEFAULT_PORTS = {'t': '50001', 's': '50002'}
+    GENESIS = "0af3c23ae1ac4910693b7187ac61641d16d1cf49cba7acf8649d48e831d86b13"
+    DEFAULT_PORTS = {'t': '40001', 's': '40002'}
     BLOCK_HEIGHT_FIRST_LIGHTNING_CHANNELS = 497000
 
     XPRV_HEADERS = {
@@ -192,9 +195,10 @@ class BitcoinTestnet(AbstractNet):
     WIF_PREFIX = 0xef
     ADDRTYPE_P2PKH = 111
     ADDRTYPE_P2SH = 196
-    SEGWIT_HRP = "tb"
+    SEGWIT_HRP = "tnv"
+    BLSCT_HRP = "tnv"
     BOLT11_HRP = SEGWIT_HRP
-    GENESIS = "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943"
+    GENESIS = "7a04d0211de9194390c69ea0ab0d67e3c18a00c5a0b4aae65a4b5cd919e5c3e6"
     DEFAULT_PORTS = {'t': '51001', 's': '51002'}
 
     XPRV_HEADERS = {

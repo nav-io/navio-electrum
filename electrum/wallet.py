@@ -4383,19 +4383,16 @@ class Multisig_Wallet(Deterministic_Wallet):
         return ''.join(sorted(self.get_master_public_keys()))
 
 
-wallet_types = ['standard', 'multisig', 'imported']
+# Navio Electrum only supports BLSCT (confidential) wallets; the legacy
+# bitcoin-style wallet types are not registered.
+wallet_types = []
 
 
 def register_wallet_type(category):
     wallet_types.append(category)
 
 
-wallet_constructors = {
-    'standard': Standard_Wallet,
-    'old': Standard_Wallet,
-    'xpub': Standard_Wallet,
-    'imported': Imported_Wallet
-}
+wallet_constructors = {}
 
 
 def register_constructor(wallet_type, constructor):
@@ -4416,11 +4413,9 @@ class Wallet(object):
 
     @staticmethod
     def wallet_class(wallet_type):
-        if multisig_type(wallet_type):
-            return Multisig_Wallet
         if wallet_type in wallet_constructors:
             return wallet_constructors[wallet_type]
-        raise WalletFileException("Unknown wallet type: " + str(wallet_type))
+        raise WalletFileException("Unsupported wallet type: " + str(wallet_type))
 
 
 def create_new_wallet(
