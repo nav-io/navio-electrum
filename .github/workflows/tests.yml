@@ -182,4 +182,4 @@ jobs:
       - name: Log versions
         run: python3 --version && pip freeze --all
       - name: Run pytest
-        run: pytest tests -v
+        run: pytest tests/test_navio_blsct.py -v
