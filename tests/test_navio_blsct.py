@@ -165,3 +165,29 @@ class TestKeyStore(ElectrumTestCase):
         ks.update_password('hunter2', None)
         self.assertFalse(ks.has_password())
         self.assertEqual(seed_before, ks.get_seed(None))
+
+
+@unittest.skipUnless(HAVE_BLSCT, "navio-blsct bindings not installed")
+class TestNavioCoreCompat(ElectrumTestCase):
+    """Derivation must match navio-core (EIP-2333 derive_master_SK applied to
+    the BIP39 entropy before FromSeedToChildKey). Vectors captured from
+    navio-core `createwallet ... mnemonic=<phrase>` + `getnewaddress "" blsct`."""
+
+    ENTROPY = '0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100'
+    # navio-core getnewaddress results for accounts 0, indices 0..2
+    CORE_ADDRS = [
+        'nav13f3qtju9pwrsme3lyfjyrwqf23vh2jfak37qh8f6qfpp0ra269uky5uykj0kja5fmy09p2tv3ctdmtc9yuha3nrmh0xzq5hgy6ddgs4rhmpghu8rrenfqcqzajxspk9ggrnessnadkcw8e453526qzszpgrdja0jak',
+        'nav13zef7mnctl0e95yujcvra66ev6farqxad4663n80nkprytwwwfl66eun2gyavkntz8wvqghxclje8gmq5w2dt8neh5m2g35k9z4qvwp7jse56upsu7dgknh9x3754zuhlp6sqzlaml7wksrk7a7z63qv2cztxhphgs',
+        'nav1kk33966kynrr3h65za8ur9ll3tdy03pc6thaad7ga5qz06sz099ud0hpv8mga4ncll2k0suf6cc5rxykkhx5yc0e8k70l3gzed56ztdt7mpv9r0l9yue84j03phptdw9vtyr2xj6r9pj77xtsts7m660yuy08hqcz2',
+    ]
+
+    def test_derive_master_sk_nonzero(self):
+        m = nb.derive_master_sk(bytes.fromhex(self.ENTROPY))
+        self.assertEqual(32, len(m))
+
+    def test_addresses_match_navio_core(self):
+        kr = nb.BlsctKeyRing(self.ENTROPY)
+        kr.ensure_keypool(0, len(self.CORE_ADDRS))
+        for i, expected in enumerate(self.CORE_ADDRS):
+            self.assertEqual(expected, kr.address(0, i),
+                             f'address (0,{i}) does not match navio-core')

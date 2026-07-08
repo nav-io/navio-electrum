@@ -14,6 +14,7 @@
 # and navio-core's wallet.
 
 import hashlib
+import hmac
 import threading
 from typing import Optional, Dict, Tuple, List, NamedTuple, Sequence
 
@@ -33,6 +34,40 @@ DEFAULT_FEE_PER_COMPONENT = 200_000
 MAIN_ACCOUNT = 0
 CHANGE_ACCOUNT = -1
 STAKING_ACCOUNT = -2
+
+# BLS12-381 curve order (subgroup r)
+_BLS12_381_R = 0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001
+
+
+def _hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    out = b''
+    prev = b''
+    i = 1
+    while len(out) < length:
+        prev = hmac.new(prk, prev + info + bytes([i]), hashlib.sha256).digest()
+        out += prev
+        i += 1
+    return out[:length]
+
+
+def derive_master_sk(seed: bytes) -> bytes:
+    """EIP-2333 HKDF_mod_r master secret key from a >=32-byte seed.
+
+    This matches navio-core's BLS12_381_KeyGen::derive_master_SK, which is
+    applied to the BIP39 entropy before FromSeedToChildKey. Returns the
+    32-byte big-endian scalar.
+    """
+    if len(seed) < 32:
+        raise ValueError('seed must be at least 32 bytes')
+    L = 48
+    salt = b'BLS-SIG-KEYGEN-SALT-'
+    while True:
+        salt = hashlib.sha256(salt).digest()
+        prk = hmac.new(salt, seed + b'\x00', hashlib.sha256).digest()
+        okm = _hkdf_expand(prk, L.to_bytes(2, 'big'), L)
+        sk = int.from_bytes(okm, 'big') % _BLS12_381_R
+        if sk != 0:
+            return sk.to_bytes(32, 'big')
 
 
 def get_blsct():
@@ -318,7 +353,10 @@ class BlsctKeyRing:
         self.seed = None
         self.spend_key = None
         if seed_hex is not None:
-            self.seed = b.Scalar.deserialize(seed_hex)
+            # navio-core derives the BLS master key from the BIP39 entropy via
+            # EIP-2333 (derive_master_SK) before FromSeedToChildKey; match that
+            master_hex = derive_master_sk(bytes.fromhex(seed_hex)).hex()
+            self.seed = b.Scalar.deserialize(master_hex)
             child = b.ChildKey(self.seed)
             self.master_blinding_key = child.to_blinding_key()
             self.token_key = child.to_token_key()
