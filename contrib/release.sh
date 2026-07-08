@@ -110,7 +110,7 @@ else
 fi
 
 # create source-only tarball
-srctarball="Electrum-sourceonly-$VERSION.tar.gz"
+srctarball="NavioElectrum-sourceonly-$VERSION.tar.gz"
 if test -f "dist/$srctarball"; then
     info "file exists: $srctarball"
 else
