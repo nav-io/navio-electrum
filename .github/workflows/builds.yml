@@ -178,10 +178,10 @@ jobs:
         include:
           - variant: full
             omit_unclean: '0'
-            artifact_name: electrum-tarball
+            artifact_name: navio-electrum-tarball
           - variant: source-only
             omit_unclean: '1'
-            artifact_name: electrum-sourceonly-tarball
+            artifact_name: navio-electrum-sourceonly-tarball
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
