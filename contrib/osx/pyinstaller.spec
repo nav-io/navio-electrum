@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from PyInstaller.building.build_main import Analysis, PYZ, EXE, BUNDLE
 
 
-PACKAGE_NAME='Electrum.app'
+PACKAGE_NAME='NavioElectrum.app'
 PYPKG='electrum'
 MAIN_SCRIPT='run_electrum'
 PROJECT_ROOT = os.path.abspath(".")
@@ -135,10 +135,10 @@ app = BUNDLE(
         'NSSupportsAutomaticGraphicsSwitching': 'True',
         'CFBundleURLTypes':
             [{
-                'CFBundleURLName': 'bitcoin',
-                'CFBundleURLSchemes': ['bitcoin', 'lightning', 'lnurlp', 'lnurlw', ],
+                'CFBundleURLName': 'navio',
+                'CFBundleURLSchemes': ['navio', 'lightning', 'lnurlp', 'lnurlw', ],
             }],
         'LSMinimumSystemVersion': '11',
-        'NSCameraUsageDescription': 'Electrum would like to access the camera to scan for QR codes',
+        'NSCameraUsageDescription': 'Navio Electrum would like to access the camera to scan for QR codes',
     },
 )
