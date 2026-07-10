@@ -154,6 +154,11 @@ info "installing electrum and its dependencies."
 "$python" -m pip install --no-build-isolation --no-dependencies --no-warn-script-location \
     --cache-dir "$PIP_CACHE_DIR" "$PROJECT_ROOT"
 
+info "installing navio-blsct (confidential transactions)."
+# manylinux wheel from PyPI; provides the BLSCT crypto the wallet needs
+"$python" -m pip install --no-warn-script-location \
+    --cache-dir "$PIP_CACHE_DIR" "navio-blsct>=0.0.38"
+
 # was only needed during build time, not runtime
 "$python" -m pip uninstall -y Cython
 
