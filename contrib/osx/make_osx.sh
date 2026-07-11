@@ -159,13 +159,19 @@ else
 fi
 cp -f "$DLL_TARGET_DIR"/libsecp256k1.*.dylib "$PROJECT_ROOT/electrum" || fail "Could not copy libsecp256k1 dylib"
 
+# ZBar powers in-app QR-code camera scanning. It is optional: if the dylib
+# fails to build (e.g. toolchain issues on new runners) we ship without it
+# rather than failing the whole build. QR scanning is then unavailable, but
+# the wallet is otherwise fully functional.
 if [ ! -f "$DLL_TARGET_DIR/libzbar.0.dylib" ]; then
     info "Building ZBar dylib..."
-    "$CONTRIB"/make_zbar.sh || fail "Could not build ZBar dylib"
+    "$CONTRIB"/make_zbar.sh || warn "Could not build ZBar dylib; QR scanning will be unavailable"
 else
     info "Skipping ZBar build: reusing already built dylib."
 fi
-cp -f "$DLL_TARGET_DIR/libzbar.0.dylib" "$PROJECT_ROOT/electrum/" || fail "Could not copy ZBar dylib"
+if [ -f "$DLL_TARGET_DIR/libzbar.0.dylib" ]; then
+    cp -f "$DLL_TARGET_DIR/libzbar.0.dylib" "$PROJECT_ROOT/electrum/" || fail "Could not copy ZBar dylib"
+fi
 
 if [ ! -f "$DLL_TARGET_DIR/libusb-1.0.dylib" ]; then
     info "Building libusb dylib..."
