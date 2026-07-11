@@ -220,8 +220,34 @@ jobs:
       - name: Install build tools
         run: brew install autoconf automake libtool coreutils gettext swig cmake
 
-      - name: Build macOS app
-        run: ./contrib/osx/make_osx.sh
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build libsecp256k1
+        run: ./contrib/make_libsecp256k1.sh
+
+      - name: Build macOS app (.app + .dmg)
+        env:
+          ELECTRUM_ECC_DONT_COMPILE: '1'
+        run: |
+          set -e
+          python3 -m pip install --upgrade pip wheel setuptools
+          # dependencies (allow binary wheels — the deterministic all-source
+          # build breaks with the runner's newer Cython)
+          python3 -m pip install -r contrib/requirements/requirements.txt
+          python3 -m pip install pyinstaller
+          # confidential-transaction support
+          python3 -m pip install "navio-blsct>=0.0.38"
+          # the wallet package itself
+          python3 -m pip install --no-dependencies .
+          # pyinstaller needs libsecp256k1 importable via electrum_ecc
+          SITE=$(python3 -c "import electrum_ecc, os; print(os.path.dirname(electrum_ecc.__file__))")
+          cp electrum/libsecp256k1.*.dylib "$SITE/" 2>/dev/null || cp contrib/_saved_dlls/libsecp256k1.*.dylib "$SITE/" 2>/dev/null || true
+          VERSION=$(git describe --tags --always)
+          ELECTRUM_VERSION=$VERSION pyinstaller --noconfirm --clean contrib/osx/pyinstaller.spec
+          hdiutil create -fs HFS+ -volname NavioElectrum -srcfolder "dist/NavioElectrum.app" "dist/navio-electrum-$VERSION.dmg"
 
       - name: List output
         run: ls -lah dist/
