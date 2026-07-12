@@ -233,6 +233,9 @@ jobs:
           # build breaks with the runner's newer Cython). The electrum-ecc
           # binary wheel bundles its own libsecp256k1.
           python3 -m pip install -r contrib/requirements/requirements.txt
+          # hardware-wallet libs (trezor/slip10/etc.) — the pyinstaller spec
+          # collects their package metadata, so they must be importable
+          python3 -m pip install -r contrib/requirements/requirements-hw.txt
           python3 -m pip install pyinstaller
           # confidential-transaction support
           python3 -m pip install "navio-blsct>=0.0.38"
