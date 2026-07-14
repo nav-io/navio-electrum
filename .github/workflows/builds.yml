@@ -287,5 +287,6 @@ jobs:
             artifacts/**/*.AppImage
             artifacts/**/*.tar.gz
             artifacts/**/*.apk
+            artifacts/**/*.dmg
             artifacts/SHA256SUMS.txt
           generate_release_notes: true
