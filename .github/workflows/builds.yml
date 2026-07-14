@@ -229,11 +229,11 @@ jobs:
         run: |
           set -e
           python3 -m pip install --upgrade pip wheel setuptools
-          # dependencies (allow binary wheels — the deterministic all-source
+          # dependencies (allow binary wheels - the deterministic all-source
           # build breaks with the runner's newer Cython). The electrum-ecc
           # binary wheel bundles its own libsecp256k1.
           python3 -m pip install -r contrib/requirements/requirements.txt
-          # hardware-wallet libs (trezor/slip10/etc.) — the pyinstaller spec
+          # hardware-wallet libs (trezor/slip10/etc.) - the pyinstaller spec
           # collects their package metadata, so they must be importable
           python3 -m pip install -r contrib/requirements/requirements-hw.txt
           python3 -m pip install pyinstaller
