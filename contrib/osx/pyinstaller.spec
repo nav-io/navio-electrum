@@ -1,6 +1,7 @@
 # -*- mode: python -*-
 import sys
 import os
+import glob
 from typing import TYPE_CHECKING
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs, copy_metadata
@@ -31,8 +32,10 @@ hiddenimports += collect_submodules(f"{PYPKG}.plugins")
 binaries = []
 # Workaround for "Retro Look":
 binaries += [b for b in collect_dynamic_libs('PyQt6') if 'macstyle' in b[0]]
-# add libsecp256k1, libusb, etc:
-binaries += [(f"{PROJECT_ROOT}/{PYPKG}/*.dylib", ".")]
+# add libsecp256k1, libusb, etc. These are built and copied into the package
+# dir by make_osx.sh; when building from binary wheels (CI), the libs are
+# bundled inside the wheels instead and no dylibs exist here.
+binaries += [(dylib, ".") for dylib in glob.glob(f"{PROJECT_ROOT}/{PYPKG}/*.dylib")]
 
 
 datas = [
@@ -118,7 +121,9 @@ exe = EXE(
     upx=True,
     icon=ICONS_FILE,
     console=False,
-    target_arch='x86_64',  # TODO investigate building 'universal2'
+    # None = native arch of the build machine (arm64 on Apple Silicon CI
+    # runners, whose wheels are arm64-only). TODO investigate 'universal2'.
+    target_arch=None,
 )
 
 app = BUNDLE(
