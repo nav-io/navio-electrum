@@ -36,6 +36,9 @@ binaries += [b for b in collect_dynamic_libs('PyQt6') if 'macstyle' in b[0]]
 # dir by make_osx.sh; when building from binary wheels (CI), the libs are
 # bundled inside the wheels instead and no dylibs exist here.
 binaries += [(dylib, ".") for dylib in glob.glob(f"{PROJECT_ROOT}/{PYPKG}/*.dylib")]
+# electrum_ecc loads its bundled libsecp256k1 dylib via an explicit path, not
+# an import, so pyinstaller does not discover it on its own
+binaries += collect_dynamic_libs('electrum_ecc')
 
 
 datas = [

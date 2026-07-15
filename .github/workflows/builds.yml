@@ -236,6 +236,9 @@ jobs:
           # hardware-wallet libs (trezor/slip10/etc.) - the pyinstaller spec
           # collects their package metadata, so they must be importable
           python3 -m pip install -r contrib/requirements/requirements-hw.txt
+          # GUI (PyQt6) + cryptography backend; without these the packaged
+          # app has no GUI and silently exits on launch
+          python3 -m pip install -r contrib/requirements/requirements-binaries-mac.txt
           python3 -m pip install pyinstaller
           # confidential-transaction support
           python3 -m pip install "navio-blsct>=0.0.38"
