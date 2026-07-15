@@ -730,7 +730,15 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
                 self.logger.warning(f'"oneserver" option enabled, but no "server" defined; falling back to localhost:1:s.')
                 self.default_server = ServerAddr.from_str("localhost:1:s")
             else:
-                self.default_server = pick_random_server(allowed_protocols=self._allowed_protocols)
+                server_addr = pick_random_server(allowed_protocols=self._allowed_protocols)
+                if server_addr is None:
+                    # no server in the packaged list matches the allowed
+                    # protocols (e.g. a young chain with no public SSL
+                    # servers yet); start disconnected instead of crashing,
+                    # the user can configure a server in the network dialog
+                    self.logger.warning('no usable server in the packaged list; falling back to localhost:1:s.')
+                    server_addr = ServerAddr.from_str("localhost:1:s")
+                self.default_server = server_addr
         assert isinstance(self.default_server, ServerAddr), f"invalid type for default_server: {self.default_server!r}"
 
     def _set_proxy(self, proxy: ProxySettings):
