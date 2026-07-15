@@ -50,10 +50,7 @@ class StakingDialog(WindowModalDialog):
 
         buttons = QHBoxLayout()
         b = QPushButton(_('Stake...'))
-        b.clicked.connect(lambda: self._stake_dialog(delegated=False))
-        buttons.addWidget(b)
-        b = QPushButton(_('Delegate stake...'))
-        b.clicked.connect(lambda: self._stake_dialog(delegated=True))
+        b.clicked.connect(self._stake_dialog)
         buttons.addWidget(b)
         b = QPushButton(_('Unstake...'))
         b.clicked.connect(self._unstake_dialog)
@@ -129,30 +126,29 @@ class StakingDialog(WindowModalDialog):
         WaitingDialog(self, _('Creating transaction...'), task,
                       on_success=on_success, on_error=on_error)
 
-    def _stake_dialog(self, *, delegated: bool):
-        title = _('Delegate stake') if delegated else _('Stake')
-        d = WindowModalDialog(self, title)
+    def _stake_dialog(self):
+        d = WindowModalDialog(self, _('Stake'))
         grid = QGridLayout()
-        row = 0
-        grid.addWidget(QLabel(_('Amount')), row, 0)
+        grid.addWidget(QLabel(_('Amount')), 0, 0)
         amount_e = BTCAmountEdit(self.window.get_decimal_point)
-        grid.addWidget(amount_e, row, 1)
-        row += 1
-        key_e = reward_e = None
-        if delegated:
-            grid.addWidget(QLabel(_('Operator delegation key')), row, 0)
-            key_e = QLineEdit()
-            key_e.setPlaceholderText(_('48-byte G1 public key (hex), published by the operator'))
-            key_e.setMinimumWidth(420)
-            grid.addWidget(key_e, row, 1)
-            row += 1
-            grid.addWidget(QLabel(_('Reward address')), row, 0)
-            reward_e = QLineEdit()
-            reward_e.setPlaceholderText(_('optional; defaults to a fresh address of this wallet'))
-            grid.addWidget(reward_e, row, 1)
-            row += 1
+        grid.addWidget(amount_e, 0, 1)
+        grid.addWidget(QLabel(_('Operator delegation key')), 1, 0)
+        key_e = QLineEdit()
+        key_e.setPlaceholderText(_('published by the staking operator; leave empty to stake without delegating'))
+        key_e.setMinimumWidth(420)
+        grid.addWidget(key_e, 1, 1)
+        grid.addWidget(QLabel(_('Reward address')), 2, 0)
+        reward_e = QLineEdit()
+        reward_e.setPlaceholderText(_('optional; defaults to a fresh address of this wallet'))
+        grid.addWidget(reward_e, 2, 1)
         vbox = QVBoxLayout(d)
         vbox.addLayout(grid)
+        note = QLabel(_(
+            'Without an operator key the coins are only locked: this wallet '
+            'does not produce blocks itself. Delegate to a staking operator '
+            'to have the coins actually stake.'))
+        note.setWordWrap(True)
+        vbox.addWidget(note)
         vbox.addLayout(Buttons(CancelButton(d), OkButton(d)))
         if not d.exec():
             return
@@ -160,10 +156,10 @@ class StakingDialog(WindowModalDialog):
         if not amount:
             self.window.show_error(_('Invalid amount'))
             return
-        delegate_key = key_e.text().strip() if key_e else None
-        reward_addr = (reward_e.text().strip() or None) if reward_e else None
-        if delegated and not delegate_key:
-            self.window.show_error(_('Missing operator delegation key'))
+        delegate_key = key_e.text().strip() or None
+        reward_addr = reward_e.text().strip() or None
+        if reward_addr and not delegate_key:
+            self.window.show_error(_('A reward address requires an operator delegation key'))
             return
 
         def make_tx(password):
