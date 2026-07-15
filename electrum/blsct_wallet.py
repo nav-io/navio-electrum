@@ -490,6 +490,34 @@ class Blsct_Wallet(Abstract_Wallet):
                 'amount_sat': it['amount_sat'],
             }
 
+    def get_full_history(self, *, fx=None, onchain_domain=None,
+                         include_lightning=True):
+        """Qt/QML history model entry point. The Abstract_Wallet version
+        walks adb/lightning structures a BLSCT wallet does not have, so
+        synthesize the same shape from our recorded outputs."""
+        from .util import OrderedDictWithIndex, Satoshis
+        local_height = self.network.get_local_height() if self.network else 0
+        out = OrderedDictWithIndex()
+        for it in self.get_history_items():
+            height = it['height']
+            conf = max(0, local_height - height + 1) if height > 0 else 0
+            amount = Satoshis(it['amount_sat'])
+            out[it['txid']] = {
+                'txid': it['txid'],
+                'lightning': False,
+                'value': amount,
+                'bc_value': amount,
+                'ln_value': Satoshis(0),
+                'timestamp': None,
+                'date': None,
+                'height': height,
+                'confirmations': conf,
+                'label': ', '.join(it.get('memos') or []),
+                'fee_sat': None,
+                'monotonic_timestamp': None,
+            }
+        return out
+
     # ------------------------------------------------------------ networking
 
     async def main_loop(self):
