@@ -682,8 +682,8 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
             _logger.error(f"could not import electrum.plot. This feature needs matplotlib to be installed. exc={e!r}")
             self.main_window.show_message("\n\n".join([
                 _("This feature requires the 'matplotlib' Python library which is not "
-                  "included in Electrum by default."),
-                _("If you run Electrum from source you can install matplotlib to use this feature."),
+                  "included in Navio Electrum by default."),
+                _("If you run Navio Electrum from source you can install matplotlib to use this feature."),
                 _("It is not possible to install matplotlib inside the binary executables "
                   "(e.g. AppImage or Windows installation).")
             ]))
@@ -829,7 +829,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
         d = WindowModalDialog(self, _('Export History'))
         d.setMinimumSize(400, 200)
         vbox = QVBoxLayout(d)
-        defaultname = f'electrum-history-{self.wallet.basename()}.csv'
+        defaultname = f'navio-electrum-history-{self.wallet.basename()}.csv'
         select_msg = _('Select file to export your wallet transactions to')
         hbox, filename_e, csv_button = filename_field(self, self.config, defaultname, select_msg)
         vbox.addLayout(hbox)
@@ -850,7 +850,7 @@ class HistoryList(MyTreeView, AcceptFileDragDrop):
                 is_csv=csv_button.isChecked(),
             )
         except (IOError, os.error) as reason:
-            export_error_label = _("Electrum was unable to produce a transaction export.")
+            export_error_label = _("Navio Electrum was unable to produce a transaction export.")
             self.main_window.show_critical(export_error_label + "\n" + str(reason), title=_("Unable to export history"))
             return
         self.main_window.show_message(_("Your wallet history has been successfully exported."))
