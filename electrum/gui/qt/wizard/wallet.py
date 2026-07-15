@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from electrum.plugin import Plugins, DeviceInfo
     from electrum.gui.qt import QElectrumApplication
 
-WIF_HELP_TEXT = (_('WIF keys are typed in Electrum, based on script type.') + '\n\n' +
+WIF_HELP_TEXT = (_('WIF keys are typed in Navio Electrum, based on script type.') + '\n\n' +
                  _('A few examples') + ':\n' +
                  'p2pkh:KxZcY47uGp9a...       \t-> 1DckmggQM...\n' +
                  'p2wpkh-p2sh:KxZcY47uGp9a... \t-> 3NhNeZQXF...\n' +
@@ -246,7 +246,7 @@ class WalletWizardComponent(WizardComponent, ABC):
 
 class WCWalletName(WalletWizardComponent, Logger):
     def __init__(self, parent, wizard):
-        WalletWizardComponent.__init__(self, parent, wizard, title=_('Electrum wallet'))
+        WalletWizardComponent.__init__(self, parent, wizard, title=_('Navio Electrum wallet'))
         Logger.__init__(self)
 
         path = wizard._path
@@ -1046,7 +1046,7 @@ class WCMultisig(WalletWizardComponent):
 
 class WCImport(WalletWizardComponent):
     def __init__(self, parent, wizard):
-        WalletWizardComponent.__init__(self, parent, wizard, title=_('Import Bitcoin Addresses or Private Keys'))
+        WalletWizardComponent.__init__(self, parent, wizard, title=_('Import Navio Addresses or Private Keys'))
         message = _(
             'Enter a list of Navio addresses (this will create a watching-only wallet), or a list of private keys.')
         header_layout = QHBoxLayout()
@@ -1316,7 +1316,7 @@ class WCChooseHWDevice(WalletWizardComponent, Logger):
                 if sys.platform == 'win32':
                     msg += _('If your device is not detected on Windows, go to "Settings", "Devices", "Connected devices", '
                              'and do "Remove device". Then, plug your device again.') + '\n'
-                    msg += _('While this is less than ideal, it might help if you run Electrum as Administrator.') + '\n'
+                    msg += _('While this is less than ideal, it might help if you run Navio Electrum as Administrator.') + '\n'
                 else:
                     msg += _('On Linux, you might have to add a new permission to your udev rules.') + '\n'
                 msg += '\n\n'

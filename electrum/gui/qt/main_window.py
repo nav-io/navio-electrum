@@ -296,12 +296,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
 
         self.contacts.fetch_openalias(self.config)
 
-        # If the option hasn't been set yet
-        if not config.cv.AUTOMATIC_CENTRALIZED_UPDATE_CHECKS.is_set():
-            choice = self.question(title="Navio Electrum - " + _("Enable update check"),
-                                   msg=_("For security reasons we advise that you always use the latest version of Electrum.") + " " +
-                                       _("Would you like to be notified when there is a newer version of Electrum available?"))
-            config.AUTOMATIC_CENTRALIZED_UPDATE_CHECKS = bool(choice)
+        # note: the upstream update-check infrastructure (electrum.org
+        # version announcements and their signing keys) does not apply to
+        # Navio Electrum, so we neither prompt for nor run update checks.
+        # Releases are announced at https://github.com/nav-io/navio-electrum.
 
         self._update_check_thread = None
         if config.AUTOMATIC_CENTRALIZED_UPDATE_CHECKS:
@@ -309,7 +307,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
             # to prevent GC from getting in our way.
             def on_version_received(v):
                 if UpdateCheck.is_newer(v):
-                    self.update_check_button.setText(_("Update to Electrum {} is available").format(v))
+                    self.update_check_button.setText(_("Update to Navio Electrum {} is available").format(v))
                     self.update_check_button.clicked.connect(lambda: self.show_update_check(v))
                     self.update_check_button.show()
             self._update_check_thread = UpdateCheckThread()
@@ -793,6 +791,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         self.labels_menu = self.wallet_menu.addMenu(_("&Labels"))
         self.labels_menu.addAction(_("&Import"), self.do_import_labels)
         self.labels_menu.addAction(_("&Export"), self.do_export_labels)
+
+        if self.wallet.wallet_type == 'blsct':
+            self.wallet_menu.addAction(_("Sta&king"), self.show_staking_dialog)
 
         self.wallet_menu.addAction(_("Find"), self.toggle_search).setShortcut(QKeySequence("Ctrl+F"))
         self.wallet_menu.addSeparator()
@@ -2014,6 +2015,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         self.wallet.init_lightning(password=password)
         self.update_lightning_icon()
         self.show_message(_('Lightning keys have been initialized.'))
+
+    def show_staking_dialog(self):
+        from .staking_dialog import StakingDialog
+        StakingDialog(self).exec()
 
     def show_wallet_info(self):
         from .wallet_info_dialog import WalletInfoDialog

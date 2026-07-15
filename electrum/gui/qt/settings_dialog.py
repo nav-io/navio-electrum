@@ -121,7 +121,7 @@ class SettingsDialog(QDialog, QtEventListener):
             if not use_trampoline:
                 if not window.question('\n'.join([
                         _("Are you sure you want to disable trampoline?"),
-                        _("Without this option, Electrum will need to sync with the Lightning network on every start."),
+                        _("Without this option, Navio Electrum will need to sync with the Lightning network on every start."),
                         _("This may impact the reliability of your payments."),
                 ]), parent=self):
                     trampoline_cb.setCheckState(Qt.CheckState.Checked)

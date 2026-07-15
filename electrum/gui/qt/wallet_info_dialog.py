@@ -82,7 +82,7 @@ class WalletInfoDialog(WindowModalDialog):
                 label.setIcon(read_QIcon('cloud_no'))
                 grid.addWidget(label, cur_row, 1)
                 if wallet.get_seed_type() == 'segwit':
-                    msg = _("Your channels cannot be recovered from seed, because they were created with an old version of Electrum. "
+                    msg = _("Your channels cannot be recovered from seed, because they were created with an old version of Navio Electrum. "
                             "This means that you must save a backup of your wallet every time you create a new channel.\n\n"
                             "If you want this wallet to have recoverable channels, you must close your existing channels and restore this wallet from seed")
                 else:

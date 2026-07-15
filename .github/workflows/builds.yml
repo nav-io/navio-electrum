@@ -58,6 +58,11 @@ jobs:
       - name: Build Windows binaries
         run: ./contrib/build-wine/build.sh
 
+      - name: Normalize binary names
+        run: |
+          cd contrib/build-wine/dist
+          for f in electrum-*; do mv -v "$f" "navio-$f"; done
+
       - name: List output
         run: ls -lah contrib/build-wine/dist/
 
@@ -117,6 +122,17 @@ jobs:
       - name: Build APK (debug)
         run: ./contrib/android/build.sh qml "$APK_ARCH" debug
 
+      - name: Normalize binary names
+        run: |
+          VERSION=$(git describe --tags --always)
+          cd dist
+          n=0
+          for f in *.apk; do
+            suffix=""; [ "$n" -gt 0 ] && suffix="-$n"
+            mv -v "$f" "navio-electrum-$VERSION-$APK_ARCH$suffix.apk"
+            n=$((n+1))
+          done
+
       - name: List output
         run: ls -lah dist/
 
@@ -155,6 +171,11 @@ jobs:
       - name: Build AppImage
         run: ./contrib/build-linux/appimage/build.sh
 
+      - name: Normalize binary names
+        run: |
+          cd dist
+          for f in electrum-*.AppImage; do mv -v "$f" "navio-$f"; done
+
       - name: List output
         run: ls -lah dist/
 
@@ -192,6 +213,14 @@ jobs:
         env:
           OMIT_UNCLEAN_FILES: ${{ matrix.omit_unclean }}
         run: ./contrib/build-linux/sdist/build.sh
+
+      - name: Normalize binary names
+        run: |
+          VERSION=$(git describe --tags --always)
+          SUFFIX=""
+          [ "${{ matrix.variant }}" = "source-only" ] && SUFFIX="-sourceonly"
+          cd dist
+          for f in *.tar.gz; do mv -v "$f" "navio-electrum-$VERSION$SUFFIX.tar.gz"; done
 
       - name: List output
         run: ls -lah dist/

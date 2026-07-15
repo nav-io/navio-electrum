@@ -193,8 +193,8 @@ class ReceiveTab(QWidget, MessageBoxMixin, Logger):
             _('This information is seen by the recipient if you send them a signed payment request.'),
             '\n\n',
             _('For on-chain requests, the address gets reserved until expiration. After that, it might get reused.'), ' ',
-            _('The navio address never expires and will always be part of this electrum wallet.'), ' ',
-            _('You can reuse a navio address any number of times but it is not good for your privacy.'),
+            _('The Navio address never expires and will always be part of this Navio Electrum wallet.'), ' ',
+            _('You can reuse a Navio address any number of times but it is not good for your privacy.'),
             '\n\n',
             _('For Lightning requests, payments will not be accepted after the expiration.'),
         ])

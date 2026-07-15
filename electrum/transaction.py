@@ -846,6 +846,14 @@ def get_address_from_output_script(_bytes: bytes, *, net=None) -> Optional[str]:
     except MalformedBitcoinScript:
         return None
 
+    # navio BLSCT address marker (see bitcoin.address_to_script)
+    if (len(decoded) == 2 and decoded[0][0] == opcodes.OP_RETURN
+            and decoded[1][1] and decoded[1][1][:4] == b'NVAD'):
+        try:
+            return decoded[1][1][4:].decode('ascii')
+        except UnicodeDecodeError:
+            return None
+
     # p2pkh
     if match_script_against_template(decoded, SCRIPTPUBKEY_TEMPLATE_P2PKH):
         return hash160_to_p2pkh(decoded[2][1], net=net)

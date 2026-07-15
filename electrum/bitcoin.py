@@ -438,6 +438,13 @@ def script_to_address(script: bytes, *, net=None) -> Optional[str]:
 
 def address_to_script(addr: str, *, net=None) -> bytes:
     if net is None: net = constants.net
+    if is_blsct_address(addr):
+        # BLSCT outputs carry no scriptPubKey; synthesize an unspendable
+        # marker script embedding the address so payment requests and
+        # invoices can round-trip it for display. It is never broadcast:
+        # BLSCT transactions are built by the navio-blsct bindings from the
+        # address string itself.
+        return construct_script([opcodes.OP_RETURN, b'NVAD' + addr.encode('ascii')])
     if not is_address(addr, net=net):
         raise BitcoinException(f"invalid bitcoin address: {neuter_bitcoin_address(addr)}")
     witver, witprog = segwit_addr.decode_segwit_address(net.SEGWIT_HRP, addr)
@@ -731,9 +738,22 @@ def is_b58_address(addr: str, *, net=None) -> bool:
     return True
 
 
+def is_blsct_address(addr: str) -> bool:
+    """Navio BLSCT (nav1...) address; validated via the blsct bindings."""
+    if not isinstance(addr, str) or len(addr) < 90 or not addr.lower().startswith('nav'):
+        return False
+    try:
+        from .navio_blsct import get_blsct
+        get_blsct().Address.decode(addr)
+        return True
+    except Exception:
+        return False
+
+
 def is_address(addr: str, *, net=None) -> bool:
     return is_segwit_address(addr, net=net) \
-           or is_b58_address(addr, net=net)
+           or is_b58_address(addr, net=net) \
+           or is_blsct_address(addr)
 
 
 def is_private_key(key: str, *, raise_on_error=False) -> bool:
