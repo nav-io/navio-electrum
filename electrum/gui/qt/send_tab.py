@@ -2,6 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file LICENCE or http://www.opensource.org/licenses/mit-license.php
 
+import asyncio
 from decimal import Decimal
 from typing import Optional, TYPE_CHECKING, Sequence, List, Callable, Union, Mapping
 import urllib.parse
@@ -607,8 +608,87 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
                 return
         if invoice.is_lightning():
             self.pay_lightning_invoice(invoice)
+        elif self.wallet.wallet_type == 'blsct':
+            self.pay_blsct_dialog(invoice)
         else:
             self.pay_onchain_dialog(invoice.outputs, invoice=invoice)
+
+    def pay_blsct_dialog(self, invoice: 'Invoice') -> None:
+        """BLSCT (confidential) payment flow: transactions are built and
+        signed in one step by the blsct bindings, so the generic
+        make_unsigned_transaction/confirm/sign pipeline does not apply."""
+        memo = self.get_message() or ''
+        recipients = []
+        is_max = False
+        for o in invoice.outputs:
+            addr = o.address
+            if addr is None:
+                self.show_error(_('Output address is missing'))
+                return
+            if parse_max_spend(o.value):
+                is_max = True
+                recipients.append((addr, 0, memo))
+            else:
+                recipients.append((addr, o.value, memo))
+        if is_max:
+            if len(recipients) != 1:
+                self.show_error(_('Max spend requires a single recipient'))
+                return
+            addr, _amt, m = recipients[0]
+            recipients = [(addr, self.wallet.get_spendable_balance_sat(), m)]
+        total = sum(r[1] for r in recipients)
+        if total <= 0:
+            self.show_error(_('No amount'))
+            return
+
+        password = None
+        if self.wallet.has_keystore_encryption():
+            password = self.window.password_dialog(parent=self)
+            if password is None:
+                return
+
+        def task():
+            built = self.wallet.create_blsct_transaction(
+                recipients, password=password,
+                subtract_fee_from_amount=is_max)
+            return built
+
+        def on_success(built):
+            dest = recipients[0][0]
+            dest_str = (dest[:24] + '...' + dest[-8:]) if len(recipients) == 1 \
+                else _('{} recipients').format(len(recipients))
+            amount_after_fee = total - (built.fee if is_max else 0)
+            if not self.question('\n'.join([
+                    _('Send {} to {}?').format(
+                        self.window.format_amount_and_units(amount_after_fee), dest_str),
+                    _('Fee: {}').format(self.window.format_amount_and_units(built.fee)),
+            ])):
+                return
+            self._broadcast_blsct(built)
+
+        def on_error(exc_info):
+            e = exc_info[1]
+            if isinstance(e, (UserFacingException, NotEnoughFunds)):
+                self.show_error(str(e))
+            else:
+                self.window.on_error(exc_info)
+
+        WaitingDialog(self, _('Creating transaction...'), task,
+                      on_success=on_success, on_error=on_error)
+
+    def _broadcast_blsct(self, built) -> None:
+        def task():
+            coro = self.wallet.broadcast_blsct_transaction(built.raw_hex)
+            fut = asyncio.run_coroutine_threadsafe(coro, self.wallet.network.asyncio_loop)
+            return fut.result(timeout=60)
+
+        def on_success(txid):
+            self.do_clear()
+            self.window.show_message(
+                _('Payment sent.') + '\n\n' + _('Transaction ID:') + ' ' + txid)
+
+        WaitingDialog(self, _('Broadcasting transaction...'), task,
+                      on_success=on_success, on_error=self.window.on_error)
 
     def read_amount(self) -> Union[int, str]:
         amount = '!' if self.max_button.isChecked() else self.get_amount()
