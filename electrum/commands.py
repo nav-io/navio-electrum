@@ -645,6 +645,73 @@ class Commands(Logger):
             domain_coins=domain_coins)
         return {'hex': built.raw_hex, 'txid': built.txid, 'fee': built.fee}
 
+    @command('wp')
+    async def stakelock(self, amount, fee=None, password=None,
+                        wallet: Abstract_Wallet = None):
+        """Lock an amount for staking (creates a staked-commitment output).
+        Existing plain stakes are consolidated into the new output. Returns
+        {'hex','txid','fee'}; broadcast it with the broadcast command.
+
+        arg:decimal:amount:Amount to stake (in NAV)
+        arg:decimal:fee:Transaction fee (absolute, in NAV; default: automatic)
+        """
+        built = wallet.create_stake_transaction(
+            satoshis(amount), password=password, fixed_fee=satoshis(fee))
+        return {'hex': built.raw_hex, 'txid': built.txid, 'fee': built.fee}
+
+    @command('wp')
+    async def delegatestake(self, amount, delegate_pubkey, reward_address=None,
+                            fee=None, password=None,
+                            wallet: Abstract_Wallet = None):
+        """Lock an amount for staking and delegate block production to a
+        third-party staking operator (cold staking). The staked output
+        carries its commitment opening encrypted to the operator, who can
+        stake it but can never spend or unstake it. Reward routing is
+        advisory: the operator controls its own coinbase, so choose operators
+        you trust to honor it. Existing stakes with the same delegation are
+        consolidated. Revoke at any time with stakeunlock.
+
+        arg:decimal:amount:Amount to stake (in NAV)
+        arg:str:delegate_pubkey:The operator's 48-byte G1 delegation public key (hex)
+        arg:str:reward_address:Address block rewards should be paid to (default: a fresh address of this wallet)
+        arg:decimal:fee:Transaction fee (absolute, in NAV; default: automatic)
+        """
+        built = wallet.create_stake_transaction(
+            satoshis(amount), password=password,
+            delegate_key_hex=delegate_pubkey,
+            reward_address=reward_address,
+            fixed_fee=satoshis(fee))
+        return {'hex': built.raw_hex, 'txid': built.txid, 'fee': built.fee}
+
+    @command('wp')
+    async def stakeunlock(self, amount=None, delegate_pubkey=None, fee=None,
+                          password=None, wallet: Abstract_Wallet = None):
+        """Unlock staked funds. By default operates on undelegated stakes;
+        pass delegate_pubkey to unstake coins delegated to that operator.
+        Omit amount to unstake the whole group.
+
+        arg:decimal:amount:Amount to unstake (in NAV; default: everything in the group)
+        arg:str:delegate_pubkey:Unstake coins delegated to this operator key (hex)
+        arg:decimal:fee:Transaction fee (absolute, in NAV; default: automatic)
+        """
+        built = wallet.create_unstake_transaction(
+            satoshis(amount) if amount is not None else None,
+            password=password,
+            delegate_key_hex=delegate_pubkey,
+            fixed_fee=satoshis(fee))
+        return {'hex': built.raw_hex, 'txid': built.txid, 'fee': built.fee}
+
+    @command('w')
+    async def liststaked(self, wallet: Abstract_Wallet = None):
+        """List staked outputs, including their delegation (if any)."""
+        outs = []
+        for u in wallet.get_staked_outputs():
+            d = u.to_json()
+            v = d.pop('value_sats')
+            d['value'] = format_satoshis(v)
+            outs.append(d)
+        return outs
+
     @command('w')
     async def onchain_history(
         self, year=None, from_height=None, to_height=None,

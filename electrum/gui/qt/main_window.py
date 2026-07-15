@@ -794,6 +794,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         self.labels_menu.addAction(_("&Import"), self.do_import_labels)
         self.labels_menu.addAction(_("&Export"), self.do_export_labels)
 
+        if self.wallet.wallet_type == 'blsct':
+            self.wallet_menu.addAction(_("Sta&king"), self.show_staking_dialog)
+
         self.wallet_menu.addAction(_("Find"), self.toggle_search).setShortcut(QKeySequence("Ctrl+F"))
         self.wallet_menu.addSeparator()
 
@@ -2014,6 +2017,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         self.wallet.init_lightning(password=password)
         self.update_lightning_icon()
         self.show_message(_('Lightning keys have been initialized.'))
+
+    def show_staking_dialog(self):
+        from .staking_dialog import StakingDialog
+        StakingDialog(self).exec()
 
     def show_wallet_info(self):
         from .wallet_info_dialog import WalletInfoDialog

@@ -24,8 +24,11 @@ from .logging import Logger
 from .wallet import (Abstract_Wallet, register_wallet_type,
                      register_constructor)
 from . import navio_blsct
-from .navio_blsct import (BlsctKeyRing, SpendableOutput, parse_tx_hex,
-                          parse_output_hex, MAIN_ACCOUNT, CHANGE_ACCOUNT,
+from . import stake_delegation
+from .navio_blsct import (BlsctKeyRing, SpendableOutput, Recipient, parse_tx_hex,
+                          parse_output_hex, ParsedTxOut,
+                          MAIN_ACCOUNT, CHANGE_ACCOUNT, STAKING_ACCOUNT,
+                          MIN_STAKE_AMOUNT,
                           bip39_entropy_to_mnemonic, bip39_mnemonic_to_entropy)
 
 if TYPE_CHECKING:
@@ -189,6 +192,8 @@ class BlsctUtxo:
             'account': self.d.get('account'),
             'address_index': self.d.get('addr_index'),
             'token_id': self.d.get('token_id'),
+            'staked': bool(self.d.get('staked')),
+            'delegation': self.d.get('delegation'),
         }
 
 
@@ -240,6 +245,7 @@ class Blsct_Wallet(Abstract_Wallet):
         self.db.put('blsct_addr_counts', counts)
         self.keyring.ensure_keypool(MAIN_ACCOUNT, counts['main'] + GAP_LIMIT)
         self.keyring.ensure_keypool(CHANGE_ACCOUNT, counts['change'] + GAP_LIMIT)
+        self.keyring.ensure_keypool(STAKING_ACCOUNT, GAP_LIMIT)
 
     def _ensure_addresses(self):
         """Mirror derived addresses into the db receiving/change lists so
@@ -410,8 +416,17 @@ class Blsct_Wallet(Abstract_Wallet):
         return utxos
 
     def get_spendable_coins(self, domain=None, **kwargs):
+        # staked commitments are locked for staking; they are spent via
+        # unstaking (create_unstake_transaction), never as regular inputs
         return [u for u in self.get_utxos()
-                if u.d.get('height', 0) > 0]
+                if u.d.get('height', 0) > 0 and not u.d.get('staked')]
+
+    def get_staked_outputs(self):
+        """Unspent staked commitments (confirmed and unconfirmed)."""
+        return [u for u in self.get_utxos() if u.d.get('staked')]
+
+    def get_staked_balance_sat(self) -> int:
+        return sum(u.d['amount'] for u in self.get_staked_outputs())
 
     # --------------------------------------------------------------- history
 
@@ -527,7 +542,8 @@ class Blsct_Wallet(Abstract_Wallet):
     def _store_output(self, output_hash: str, *, tx_hash: str, height: int,
                       amount: int, gamma_hex: str, blinding_key_hex: str,
                       account: int, addr_index: int, memo: str,
-                      token_id: Optional[str], staked: bool = False):
+                      token_id: Optional[str], staked: bool = False,
+                      delegation: Optional[dict] = None):
         with self._blsct_lock:
             existing = self.blsct_outputs.get(output_hash)
             if existing:
@@ -546,9 +562,38 @@ class Blsct_Wallet(Abstract_Wallet):
                 'memo': memo or '',
                 'token_id': token_id,
                 'staked': staked,
+                # {'delegate_key': hex, 'reward_address': str} for outputs
+                # whose stake is delegated to a third-party staker
+                'delegation': delegation,
                 'spent_by': None,
                 'spent_height': None,
             }
+
+    def _classify_output(self, parsed: ParsedTxOut) -> Tuple[bool, Optional[dict]]:
+        """Detect whether a (recovered, ours) output is a staked commitment
+        and, if so, whether it carries a cold-staking delegation we can
+        recover with our view key."""
+        s = parsed.script
+        # CTxOut::IsStakedCommitment(): OP_STAKED_COMMITMENT OP_PUSHDATA2
+        # <proof> OP_TRUE
+        staked = (len(s) > 7 and s[0] == 0xb9 and s[1] == 0x4d and s[-1] == 0x51)
+        delegation = None
+        if staked and parsed.vdata:
+            blob = stake_delegation.data_from_predicate(parsed.vdata)
+            if blob is not None and stake_delegation.is_delegation_data(blob):
+                try:
+                    nonce_obj = self.keyring.calc_nonce(parsed.blinding_key.hex())
+                    nonce = bytes.fromhex(nonce_obj.get_point().serialize())
+                    req = stake_delegation.recover_owner_info(blob, nonce)
+                except Exception:
+                    self.logger.exception('could not decode delegation payload')
+                    req = None
+                if req is not None:
+                    delegation = {
+                        'delegate_key': req.delegate_key.hex(),
+                        'reward_address': req.reward_address,
+                    }
+        return staked, delegation
 
     def _mark_spent(self, output_hash: str, tx_hash: str, height: int):
         with self._blsct_lock:
@@ -570,18 +615,35 @@ class Blsct_Wallet(Abstract_Wallet):
 
     # ------------------------------------------------------------------ send
 
-    def create_blsct_transaction(self, recipients: Sequence[Tuple[str, int, str]],
-                                 password=None, fixed_fee: Optional[int] = None,
-                                 domain_coins: Optional[Sequence[str]] = None,
-                                 subtract_fee_from_amount: bool = False):
-        """recipients: [(nav1 address, amount_sats, memo)]
-        Returns navio_blsct.BuiltTx."""
+    def _spending_keyring(self, password) -> BlsctKeyRing:
         keyring = self.keyring
         if self.keystore.has_password():
             self.keystore.check_password(password)
         if not keyring.can_spend():
             keyring = BlsctKeyRing(self.keystore.get_seed_hex(password))
             keyring.subaddr_by_hashid = dict(self.keyring.subaddr_by_hashid)
+        return keyring
+
+    @staticmethod
+    def _coin_to_spendable(c: 'BlsctUtxo') -> SpendableOutput:
+        d = c.d
+        return SpendableOutput(
+            output_hash=c.output_hash,
+            amount=d['amount'],
+            gamma_hex=d['gamma'],
+            blinding_key_hex=d['blinding_key'],
+            account=d['account'],
+            index=d['addr_index'],
+            staked_commitment=bool(d.get('staked')),
+        )
+
+    def create_blsct_transaction(self, recipients: Sequence[Tuple[str, int, str]],
+                                 password=None, fixed_fee: Optional[int] = None,
+                                 domain_coins: Optional[Sequence[str]] = None,
+                                 subtract_fee_from_amount: bool = False):
+        """recipients: [(nav1 address, amount_sats, memo)]
+        Returns navio_blsct.BuiltTx."""
+        keyring = self._spending_keyring(password)
         coins = self.get_spendable_coins()
         if domain_coins:
             coins = [c for c in coins if c.output_hash in domain_coins]
@@ -598,23 +660,179 @@ class Blsct_Wallet(Abstract_Wallet):
         if selected_amt < total_out + (0 if subtract_fee_from_amount else est_fee(len(selected))):
             if not (subtract_fee_from_amount and selected_amt >= total_out):
                 raise NotEnoughFunds()
-        utxos = []
-        for c in selected:
-            d = c.d
-            utxos.append(SpendableOutput(
-                output_hash=c.output_hash,
-                amount=d['amount'],
-                gamma_hex=d['gamma'],
-                blinding_key_hex=d['blinding_key'],
-                account=d['account'],
-                index=d['addr_index'],
-                staked_commitment=bool(d.get('staked')),
-            ))
+        utxos = [self._coin_to_spendable(c) for c in selected]
         built = navio_blsct.build_signed_tx(
             keyring, utxos, list(recipients),
             fixed_fee=fixed_fee,
             subtract_fee_from_amount=subtract_fee_from_amount)
         return built
+
+    # ---------------------------------------------------------------- staking
+
+    @staticmethod
+    def _delegation_id(d: Optional[dict]) -> str:
+        """Group identity of a stake: same delegate key and reward address
+        (or '' for undelegated stakes). Mirrors DelegationRequest::GetId()."""
+        if not d:
+            return ''
+        return d['delegate_key'] + ':' + d['reward_address']
+
+    def _next_staking_address(self) -> str:
+        used = set()
+        with self._blsct_lock:
+            for d in self.blsct_outputs.values():
+                if d.get('account') == STAKING_ACCOUNT:
+                    used.add(d.get('addr_index'))
+        index = 0
+        while index in used:
+            index += 1
+        self.keyring.ensure_keypool(STAKING_ACCOUNT, index + 1 + GAP_LIMIT)
+        return self.keyring.address(STAKING_ACCOUNT, index)
+
+    def _parse_delegate_key(self, delegate_key_hex: str) -> bytes:
+        b = navio_blsct.get_blsct()
+        try:
+            key_bytes = bytes.fromhex(delegate_key_hex)
+            if len(key_bytes) != stake_delegation.POINT_SIZE:
+                raise ValueError
+            if not b.Point.deserialize(delegate_key_hex).is_valid():
+                raise ValueError
+        except Exception:
+            raise UserFacingException('delegate key is not a valid 48-byte G1 point')
+        return key_bytes
+
+    def create_stake_transaction(self, amount: int, password=None, *,
+                                 delegate_key_hex: Optional[str] = None,
+                                 reward_address: Optional[str] = None,
+                                 consolidate: bool = True,
+                                 fixed_fee: Optional[int] = None):
+        """Lock `amount` sats for staking (a staked-commitment output to our
+        own staking sub-address).
+
+        With `delegate_key_hex`, block production is delegated to that
+        staking operator (cold staking): the output carries the commitment
+        opening encrypted to the operator, who can then stake it but never
+        spend it. Block rewards are requested to be paid to `reward_address`
+        (default: a fresh address of this wallet); note the reward routing is
+        advisory - the operator controls its own coinbase.
+
+        Existing confirmed stakes with the same delegation identity (same
+        delegate key + reward address; or undelegated, for a plain stake) are
+        consolidated into the new output. Returns navio_blsct.BuiltTx."""
+        if amount <= 0:
+            raise UserFacingException('amount must be positive')
+        delegation = None
+        if delegate_key_hex:
+            if not navio_blsct.supports_data_predicate():
+                raise UserFacingException(
+                    'stake delegation is not supported by the installed '
+                    'navio-blsct bindings; please upgrade')
+            key_bytes = self._parse_delegate_key(delegate_key_hex)
+            if not reward_address:
+                reward_address = self.get_unused_address()
+            try:
+                navio_blsct.get_blsct().Address.decode(reward_address)
+            except Exception:
+                raise UserFacingException('invalid reward address')
+            delegation = stake_delegation.DelegationRequest(key_bytes, reward_address)
+        elif reward_address:
+            raise UserFacingException('reward_address requires a delegate key')
+
+        keyring = self._spending_keyring(password)
+        staked_inputs = []
+        if consolidate:
+            want_id = delegation.id() if delegation else ''
+            staked_inputs = [
+                u for u in self.get_staked_outputs()
+                if u.d.get('height', 0) > 0
+                and self._delegation_id(u.d.get('delegation')) == want_id
+            ]
+        consolidated = sum(u.d['amount'] for u in staked_inputs)
+        total_staked = amount + consolidated
+        if total_staked < MIN_STAKE_AMOUNT:
+            raise UserFacingException(
+                f'total stake must be at least {MIN_STAKE_AMOUNT} sats')
+
+        coins = self.get_spendable_coins()
+        coins.sort(key=lambda c: -c.d['amount'])
+        est_fee = lambda n: (n + 3) * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        selected = []
+        selected_amt = 0
+        for c in coins:
+            if selected_amt >= amount + est_fee(len(selected) + len(staked_inputs)):
+                break
+            selected.append(c)
+            selected_amt += c.d['amount']
+        if selected_amt < amount + est_fee(len(selected) + len(staked_inputs)):
+            raise NotEnoughFunds()
+
+        utxos = [self._coin_to_spendable(c) for c in selected + staked_inputs]
+        stake_addr = self._next_staking_address()
+        rec = Recipient(stake_addr, total_staked, '', 'StakedCommitment',
+                        MIN_STAKE_AMOUNT, delegation)
+        return navio_blsct.build_signed_tx(keyring, utxos, [rec],
+                                           fixed_fee=fixed_fee)
+
+    def create_unstake_transaction(self, amount: Optional[int] = None,
+                                   password=None, *,
+                                   delegate_key_hex: Optional[str] = None,
+                                   fixed_fee: Optional[int] = None):
+        """Unlock staked funds. Operates on one delegation group at a time:
+        by default the undelegated stakes; pass `delegate_key_hex` to unstake
+        coins delegated to that operator. `amount=None` unstakes the whole
+        group. The unstaked amount (minus the fee) becomes a normal spendable
+        output; any remainder stays staked with the same delegation. Returns
+        navio_blsct.BuiltTx."""
+        group = [u for u in self.get_staked_outputs() if u.d.get('height', 0) > 0]
+        if delegate_key_hex:
+            key = delegate_key_hex.lower()
+            group = [u for u in group
+                     if (u.d.get('delegation') or {}).get('delegate_key') == key]
+        else:
+            group = [u for u in group if not u.d.get('delegation')]
+        if not group:
+            raise UserFacingException('no matching staked outputs')
+        total_group = sum(u.d['amount'] for u in group)
+        if amount is None:
+            amount = total_group
+        if amount <= 0 or amount > total_group:
+            raise UserFacingException(
+                f'invalid unstake amount (staked in this group: {total_group} sats)')
+
+        group.sort(key=lambda u: -u.d['amount'])
+        selected = []
+        selected_amt = 0
+        for u in group:
+            if selected_amt >= amount:
+                break
+            selected.append(u)
+            selected_amt += u.d['amount']
+        remainder = selected_amt - amount
+
+        recipients = []
+        if remainder > 0:
+            if remainder < MIN_STAKE_AMOUNT:
+                raise UserFacingException(
+                    f'the remaining stake would fall below the minimum '
+                    f'({MIN_STAKE_AMOUNT} sats); unstake less or everything')
+            deleg = selected[0].d.get('delegation')
+            delegation = None
+            if deleg:
+                if not navio_blsct.supports_data_predicate():
+                    raise UserFacingException(
+                        'stake delegation is not supported by the installed '
+                        'navio-blsct bindings; please upgrade')
+                delegation = stake_delegation.DelegationRequest(
+                    bytes.fromhex(deleg['delegate_key']), deleg['reward_address'])
+            stake_addr = self._next_staking_address()
+            recipients.append(Recipient(stake_addr, remainder, '',
+                                        'StakedCommitment', MIN_STAKE_AMOUNT,
+                                        delegation))
+
+        keyring = self._spending_keyring(password)
+        utxos = [self._coin_to_spendable(u) for u in selected]
+        return navio_blsct.build_signed_tx(keyring, utxos, recipients,
+                                           fixed_fee=fixed_fee)
 
     async def broadcast_blsct_transaction(self, raw_hex: str) -> str:
         if not self.network or not self.network.interface:
@@ -643,12 +861,14 @@ class Blsct_Wallet(Abstract_Wallet):
             if not rec:
                 continue
             token_id = out.token_id.hex() if (out.token_id and out.token_id != bytes(32)) else None
+            staked, delegation = self._classify_output(out)
             self._store_output(out.output_hash,
                                tx_hash=txid, height=0, amount=rec.amount,
                                gamma_hex=rec.gamma_hex,
                                blinding_key_hex=out.blinding_key.hex(),
                                account=pair[0], addr_index=pair[1],
-                               memo=rec.memo, token_id=token_id)
+                               memo=rec.memo, token_id=token_id,
+                               staked=staked, delegation=delegation)
 
 
 class BlsctSynchronizer(NetworkJobOnDefaultServer):
@@ -826,15 +1046,16 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
             return
         token_id = (parsed.token_id.hex()
                     if (parsed.token_id and parsed.token_id != bytes(32)) else None)
+        staked, delegation = wallet._classify_output(parsed)
         wallet._store_output(output_hash,
                              tx_hash=tx_hash, height=height, amount=rec.amount,
                              gamma_hex=rec.gamma_hex,
                              blinding_key_hex=blinding_key_hex,
                              account=pair[0], addr_index=pair[1],
                              memo=rec.memo, token_id=token_id,
-                             staked=False)
+                             staked=staked, delegation=delegation)
         self.logger.info(f'found output {output_hash[:16]} amount={rec.amount} '
-                         f'height={height} acct={pair}')
+                         f'height={height} acct={pair} staked={staked}')
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from typing import Optional, Dict, Tuple, List, NamedTuple, Sequence
 from .crypto import sha256d, hash_160
 from .logging import get_logger
 from .util import NotEnoughFunds
+from . import stake_delegation
 
 _logger = get_logger(__name__)
 
@@ -34,6 +35,9 @@ DEFAULT_FEE_PER_COMPONENT = 200_000
 MAIN_ACCOUNT = 0
 CHANGE_ACCOUNT = -1
 STAKING_ACCOUNT = -2
+
+# consensus.nPePoSMinStakeAmount (navio-core chainparams; mainnet + testnet)
+MIN_STAKE_AMOUNT = 10_000 * 100_000_000
 
 # BLS12-381 curve order (subgroup r)
 _BLS12_381_R = 0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001
@@ -533,10 +537,68 @@ class SpendableOutput(NamedTuple):
     staked_commitment: bool = False
 
 
+class Recipient(NamedTuple):
+    """One transaction output to create. Plain (addr, amount, memo) tuples
+    are accepted anywhere a Recipient is; they mean a Normal output."""
+    address: str
+    amount: int
+    memo: str = ''
+    output_type: str = 'Normal'   # or 'StakedCommitment'
+    min_stake: int = 0
+    # attach an encrypted cold-staking delegation payload (DATA predicate);
+    # only valid on a StakedCommitment output
+    delegation: Optional[stake_delegation.DelegationRequest] = None
+
+
+def _as_recipient(r) -> Recipient:
+    if isinstance(r, Recipient):
+        return r
+    addr, amount, memo = r
+    return Recipient(addr, amount, memo or '')
+
+
+def supports_data_predicate() -> bool:
+    """Whether the installed navio-blsct bindings can attach a DATA predicate
+    to an output before signing (needed for delegated cold staking)."""
+    b = get_blsct()
+    return hasattr(b, 'set_unsigned_output_data_predicate')
+
+
 class BuiltTx(NamedTuple):
     raw_hex: str
     txid: str
     fee: int
+
+
+def _attach_delegation(b, unsigned_output, rec: 'Recipient', blinding_key) -> None:
+    """Set the encrypted cold-staking delegation payload (DATA predicate) on
+    a freshly built unsigned staked-commitment output."""
+    if rec.output_type != 'StakedCommitment':
+        raise ValueError('delegation requires a StakedCommitment output')
+    if not hasattr(b, 'set_unsigned_output_data_predicate'):
+        raise ValueError(
+            'the installed navio-blsct bindings do not support stake '
+            'delegation; upgrade the navio-blsct package')
+    gamma_obj = b.get_unsigned_output_gamma(unsigned_output)
+    if gamma_obj is None:
+        raise ValueError('could not read output gamma')
+    try:
+        gamma = bytes.fromhex(b.serialize_scalar(gamma_obj))
+    finally:
+        b.free_obj(gamma_obj)
+    # the output's BLSCT nonce: destination view pubkey * output blinding key.
+    # The owner section of the payload is keyed on it so the wallet can
+    # re-derive its delegations from the chain alone.
+    dpk_ser = bytes.fromhex(b.Address.decode(rec.address).serialize())
+    vk_point = dpk_ser[:48]
+    nonce = stake_delegation._point_mul(b, vk_point, blinding_key)
+    blob = stake_delegation.encrypt(
+        b,
+        stake_delegation.DelegationInfo(rec.amount, gamma, rec.delegation.reward_address),
+        rec.delegation,
+        nonce)
+    if not b.set_unsigned_output_data_predicate(unsigned_output, blob.hex()):
+        raise ValueError('could not set delegation predicate')
 
 
 def _required_fee(tx_bytes_len: int) -> int:
@@ -563,10 +625,13 @@ def build_signed_tx(keyring: BlsctKeyRing,
     fixed_fee is given.
     """
     b = get_blsct()
+    recipients = [_as_recipient(r) for r in recipients]
     total_in = sum(u.amount for u in utxos)
-    total_out = sum(a for (_, a, _) in recipients)
+    total_out = sum(r.amount for r in recipients)
     if subtract_fee_from_amount and len(recipients) != 1:
         raise ValueError('subtract_fee_from_amount requires exactly one recipient')
+    if subtract_fee_from_amount and recipients[0].output_type != 'Normal':
+        raise ValueError('cannot subtract fee from a staked output')
 
     def build_with_fee(fee: int) -> str:
         send_total = total_out - (fee if subtract_fee_from_amount else 0)
@@ -591,23 +656,34 @@ def build_signed_tx(keyring: BlsctKeyRing,
                 b.free_obj(rv)
             outs = []
             if subtract_fee_from_amount:
-                addr, amount, memo = recipients[0]
-                outs.append((addr, amount - fee, memo))
+                r = recipients[0]
+                outs.append(r._replace(amount=r.amount - fee))
             else:
                 outs = list(recipients)
             if change > 0:
                 change_addr = keyring.address(*change_address_pair)
-                outs.append((change_addr, change, ''))
-            for addr, amount, memo in outs:
-                if amount <= 0:
+                outs.append(Recipient(change_addr, change))
+            for rec in outs:
+                if rec.amount <= 0:
                     raise ValueError('output amount must be positive')
-                sub_addr = keyring.address_to_subaddr(addr)
-                txout = b.TxOut(sub_addr, amount, memo or '',
-                                b.TokenId(), 'Normal', 0, False, b.Scalar.random())
+                sub_addr = keyring.address_to_subaddr(rec.address)
+                blinding_key = b.Scalar.random()
+                txout = b.TxOut(sub_addr, rec.amount, rec.memo or '',
+                                b.TokenId(), rec.output_type, rec.min_stake,
+                                False, blinding_key)
                 rv = b.build_unsigned_output(txout.value())
                 if int(rv.result) != 0:
                     b.free_obj(rv)
                     raise ValueError(f'build_unsigned_output failed: {rv.result}')
+                if rec.delegation is not None:
+                    # attach the encrypted delegation payload as a DATA
+                    # predicate; must happen before signing, as the predicate
+                    # is covered by the output's ownership signature
+                    try:
+                        _attach_delegation(b, rv.value, rec, blinding_key)
+                    except Exception:
+                        b.free_obj(rv)
+                        raise
                 b.add_unsigned_transaction_output(utx, rv.value)
                 b.free_obj(rv)
             b.set_unsigned_transaction_fee(utx, fee)
