@@ -60,8 +60,12 @@ jobs:
 
       - name: Normalize binary names
         run: |
-          cd contrib/build-wine/dist
-          for f in electrum-*; do mv -v "$f" "navio-$f"; done
+          # rename recursively: build.sh leaves extra exes (e.g. -debug) in
+          # a dist/electrum/ subdirectory, and the release glob picks up
+          # everything under the artifact
+          find contrib/build-wine/dist -type f -name 'electrum-*' | while read -r f; do
+            mv -v "$f" "$(dirname "$f")/navio-$(basename "$f")"
+          done
 
       - name: List output
         run: ls -lah contrib/build-wine/dist/

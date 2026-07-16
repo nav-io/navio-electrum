@@ -4,7 +4,10 @@
 title = Navio Electrum
 
 # (str) Package name
-package.name = NavioElectrum
+# note: do NOT change package.name - p4a breaks on non-default names (see
+# the FIXME in make_apk.sh). The app identity is differentiated via
+# package.domain; the user-visible name comes from `title`.
+package.name = Electrum
 
 # (str) Package domain (needed for android/ios packaging)
 package.domain = io.nav
