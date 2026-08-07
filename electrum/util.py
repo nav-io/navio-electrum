@@ -147,6 +147,25 @@ def parse_max_spend(amt: Any) -> Optional[int]:
         return x
     return None
 
+def coin_name(utxo) -> str:
+    """Stable identifier for a wallet coin: the "txid:n" outpoint string for
+    on-chain UTXOs, the output hash for BLSCT outputs (which have no public
+    outpoint)."""
+    prevout = getattr(utxo, 'prevout', None)
+    return prevout.to_str() if prevout is not None else utxo.output_hash
+
+
+def coin_txid(utxo) -> str:
+    """Txid of the transaction that created a wallet coin."""
+    prevout = getattr(utxo, 'prevout', None)
+    return prevout.txid.hex() if prevout is not None else utxo.d['tx_hash']
+
+
+def coin_short_name(utxo) -> str:
+    prevout = getattr(utxo, 'prevout', None)
+    return prevout.short_name() if prevout is not None else utxo.output_hash[:10] + '…'
+
+
 class NotEnoughFunds(Exception):
     def __str__(self):
         return _("Insufficient funds")

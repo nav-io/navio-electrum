@@ -181,6 +181,18 @@ class BlsctUtxo:
     def value_sats(self):
         return self.d.get('amount')
 
+    @property
+    def address(self):
+        return self.d.get('address')
+
+    @property
+    def block_height(self):
+        return self.d.get('height') or 0
+
+    @property
+    def short_id(self):
+        return self.output_hash[:10] + '…'
+
     def to_json(self):
         return {
             'output_hash': self.output_hash,
@@ -406,6 +418,13 @@ class Blsct_Wallet(Abstract_Wallet):
     def get_spendable_balance_sat(self, **kwargs) -> int:
         return sum(c.d['amount'] for c in self.get_spendable_coins())
 
+    def get_frozen_balance(self) -> Tuple[int, int, int]:
+        # freezing coins/addresses is not supported for BLSCT outputs
+        return 0, 0, 0
+
+    def is_frozen_coin(self, utxo) -> bool:
+        return False
+
     def get_utxos(self, domain=None, **kwargs):
         utxos = []
         with self._blsct_lock:
@@ -489,6 +508,13 @@ class Blsct_Wallet(Abstract_Wallet):
                 'height': it['height'],
                 'amount_sat': it['amount_sat'],
             }
+
+    def get_num_parents(self, txid: str):
+        # no public parent-tx graph for confidential outputs
+        return None
+
+    def get_tx_parents(self, txid: str):
+        return {}
 
     def get_full_history(self, *, fx=None, onchain_domain=None,
                          include_lightning=True):

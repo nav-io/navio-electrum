@@ -58,7 +58,7 @@ from electrum.util import (format_time, UserCancelled, profiler, bfh, InvalidPas
                            UserFacingException, get_new_wallet_name,
                            send_exception_to_crash_reporter,
                            AddTransactionException, os_chmod, UI_UNIT_NAME_TXSIZE_VBYTES,
-                           is_valid_email, ChoiceItem, event_listener)
+                           is_valid_email, ChoiceItem, event_listener, coin_name)
 from electrum.bip21 import BITCOIN_BIP21_URI_SCHEME
 from electrum.payment_identifier import PaymentIdentifier
 from electrum.invoices import PR_PAID, Invoice
@@ -1143,6 +1143,23 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         d.exec()
 
     def show_utxo(self, utxo):
+        if not hasattr(utxo, 'prevout'):
+            # BLSCT output: confidential, no public outpoint or parent chain
+            # to analyze, so the privacy-analysis dialog does not apply
+            d = utxo.d
+            parts = [
+                _('Output hash') + ': ' + utxo.output_hash,
+                _('Transaction ID') + ': ' + str(d.get('tx_hash')),
+                _('Height') + ': ' + str(d.get('height')),
+                _('Amount') + ': ' + self.format_amount_and_units(d.get('amount') or 0),
+                _('Address') + ': ' + str(d.get('address')),
+            ]
+            if d.get('memo'):
+                parts.append(_('Memo') + ': ' + d['memo'])
+            if d.get('staked'):
+                parts.append(_('Staked commitment'))
+            self.show_message('\n'.join(parts), title=_('BLSCT output'))
+            return
         from . import utxo_dialog
         d = utxo_dialog.UTXODialog(self, utxo)
         d.exec()
@@ -1553,7 +1570,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         self.address_list.selectionModel().clearSelection()
 
     def set_frozen_state_of_coins(self, utxos: Sequence[PartialTxInput], freeze: bool):
-        utxos_str = {utxo.prevout.to_str() for utxo in utxos}
+        utxos_str = {coin_name(utxo) for utxo in utxos}
         self.wallet.set_frozen_state_of_coins(utxos_str, freeze)
         self.utxo_list.refresh_all()
         self.utxo_list.selectionModel().clearSelection()

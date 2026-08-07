@@ -4,7 +4,7 @@ from PyQt6.QtCore import pyqtSlot, QSortFilterProxyModel, pyqtSignal, pyqtProper
 from PyQt6.QtCore import Qt, QAbstractListModel, QModelIndex
 
 from electrum.logging import get_logger
-from electrum.util import Satoshis
+from electrum.util import Satoshis, coin_name, coin_txid, coin_short_name
 
 from electrum.gui.common_qt.util import QtEventListener, qt_event_listener
 
@@ -176,18 +176,18 @@ class QEAddressCoinListModel(QAbstractListModel, QtEventListener):
         return item
 
     def coin_to_model(self, addrtype: str, coin: 'PartialTxInput'):
-        txid = coin.prevout.txid.hex()
+        txid = coin_txid(coin)
         short_id = ''
         # check below duplicated from TxInput as we cannot get short_id unambiguously
-        if coin.block_txpos is not None and coin.block_txpos >= 0:
+        if getattr(coin, 'block_txpos', None) is not None and coin.block_txpos >= 0:
             short_id = str(coin.short_id)
         item = {
             'type': addrtype,
             'amount': QEAmount(amount_sat=coin.value_sats()),
             'address': coin.address,
             'height': coin.block_height,
-            'outpoint': coin.prevout.to_str(),
-            'short_outpoint': coin.prevout.short_name(),
+            'outpoint': coin_name(coin),
+            'short_outpoint': coin_short_name(coin),
             'short_id': short_id,
             'txid': txid,
             'label': self.wallet.get_label_for_txid(txid) or '',

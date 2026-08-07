@@ -35,7 +35,7 @@ from electrum.i18n import _
 from electrum.bitcoin import is_address
 from electrum.transaction import PartialTxInput, PartialTxOutput
 from electrum.lnutil import MIN_FUNDING_SAT
-from electrum.util import profiler
+from electrum.util import profiler, coin_name, coin_txid
 from electrum.plugin import run_hook
 
 from .util import ColorScheme, MONOSPACE_FONT
@@ -104,11 +104,11 @@ class UTXOList(MyTreeView):
         self.proxy.setDynamicSortFilter(False)  # temp. disable re-sorting after every change
         utxos = self.wallet.get_utxos()
         self._maybe_reset_coincontrol(utxos)
-        self._utxo_dict = dict([(utxo.prevout.to_str(), utxo) for utxo in utxos])
+        self._utxo_dict = dict([(coin_name(utxo), utxo) for utxo in utxos])
         self.std_model.clear()
         self.update_headers(self.__class__.headers)
         for idx, utxo in enumerate(utxos):
-            name = utxo.prevout.to_str()
+            name = coin_name(utxo)
             labels = [""] * len(self.Columns)
             amount_str = self.main_window.format_amount(
                 utxo.value_sats(), whitespaces=True)
@@ -149,7 +149,7 @@ class UTXOList(MyTreeView):
         assert row is not None
         utxo = self._utxo_dict[key]
         utxo_item = [self.std_model.item(row, col) for col in self.Columns]
-        txid = utxo.prevout.txid.hex()
+        txid = coin_txid(utxo)
         num_parents = self.wallet.get_num_parents(txid)
         utxo_item[self.Columns.PARENTS].setText('%6s'%num_parents if num_parents else '-')
         label = self.wallet.get_label_for_txid(txid) or ''
@@ -189,18 +189,18 @@ class UTXOList(MyTreeView):
         return coins
 
     def are_in_coincontrol(self, coins: List[PartialTxInput]) -> bool:
-        return all([utxo.prevout.to_str() in self._spend_set for utxo in coins])
+        return all([coin_name(utxo) in self._spend_set for utxo in coins])
 
     def add_to_coincontrol(self, coins: List[PartialTxInput]):
-        assert all(utxo.prevout.to_str() in self._utxo_dict for utxo in coins) # see issue 10206
+        assert all(coin_name(utxo) in self._utxo_dict for utxo in coins) # see issue 10206
         coins = self._filter_frozen_coins(coins)
         for utxo in coins:
-            self._spend_set.add(utxo.prevout.to_str())
+            self._spend_set.add(coin_name(utxo))
         self._refresh_coincontrol()
 
     def remove_from_coincontrol(self, coins: List[PartialTxInput]):
         for utxo in coins:
-            self._spend_set.remove(utxo.prevout.to_str())
+            self._spend_set.remove(coin_name(utxo))
         self._refresh_coincontrol()
 
     def clear_coincontrol(self):
@@ -232,7 +232,7 @@ class UTXOList(MyTreeView):
     def _maybe_reset_coincontrol(self, current_wallet_utxos: Sequence[PartialTxInput]) -> None:
         if not self._spend_set and not self._currently_open_menu:
             return
-        utxo_set = {utxo.prevout.to_str() for utxo in current_wallet_utxos}
+        utxo_set = {coin_name(utxo) for utxo in current_wallet_utxos}
         if self._currently_open_menu:
             # if we spent one of the qt-highlighted UTXOs, close context-menu
             if not all(prevout_str in utxo_set for prevout_str in self.get_selected_outpoints()):
@@ -315,23 +315,26 @@ class UTXOList(MyTreeView):
             if not idx.isValid():
                 return
             utxo = coins[0]
-            txid = utxo.prevout.txid.hex()
+            txid = coin_txid(utxo)
             # "Details"
             tx = self.wallet.adb.get_transaction(txid)
             if tx:
                 label = self.wallet.get_label_for_txid(txid)
                 menu.addAction(_("Privacy analysis"), lambda: self.main_window.show_utxo(utxo))
             cc = self.add_copy_menu(menu, idx)
-            cc.addAction(_("Long Output point"), lambda: self.place_text_on_clipboard(utxo.prevout.to_str(), title="Long Output point"))
+            cc.addAction(_("Long Output point"), lambda: self.place_text_on_clipboard(coin_name(utxo), title="Long Output point"))
         # fully spend
-        m = menu_spend = menu.addMenu(_("Fully spend") + '…')
-        m.setEnabled(bool(unfrozen_coins))
-        m = menu_spend.addAction(_("send to address in clipboard"), lambda: self.pay_to_clipboard_address(unfrozen_coins))
-        m.setEnabled(self.clipboard_contains_address())
-        m = menu_spend.addAction(_("in new channel"), lambda: self.open_channel_with_coins(unfrozen_coins))
-        m.setEnabled(self.can_open_channel(unfrozen_coins))
-        m = menu_spend.addAction(_("in submarine swap"), lambda: self.swap_coins(unfrozen_coins))
-        m.setEnabled(self.can_swap_coins(unfrozen_coins))
+        # (not for blsct: those coins cannot go through the generic
+        # make_unsigned_transaction pipeline; sending is done via the Send tab)
+        if self.wallet.wallet_type != 'blsct':
+            m = menu_spend = menu.addMenu(_("Fully spend") + '…')
+            m.setEnabled(bool(unfrozen_coins))
+            m = menu_spend.addAction(_("send to address in clipboard"), lambda: self.pay_to_clipboard_address(unfrozen_coins))
+            m.setEnabled(self.clipboard_contains_address())
+            m = menu_spend.addAction(_("in new channel"), lambda: self.open_channel_with_coins(unfrozen_coins))
+            m.setEnabled(self.can_open_channel(unfrozen_coins))
+            m = menu_spend.addAction(_("in submarine swap"), lambda: self.swap_coins(unfrozen_coins))
+            m.setEnabled(self.can_swap_coins(unfrozen_coins))
         # coin control
         if self.are_in_coincontrol(coins):
             menu.addAction(_("Remove from coin control"), lambda: self.remove_from_coincontrol(coins))

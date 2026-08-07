@@ -15,7 +15,7 @@ except ImportError:  # only use vendored lib as fallback, to allow Linux distros
 
 from electrum.gui import BaseElectrumGui
 from electrum.bip21 import parse_bip21_URI
-from electrum.util import format_time
+from electrum.util import format_time, coin_name, coin_txid
 from electrum.util import EventListener, event_listener
 from electrum.bitcoin import is_address, address_to_script
 from electrum.transaction import PartialTxOutput
@@ -331,8 +331,8 @@ class ElectrumGui(BaseElectrumGui, EventListener):
         fmt = self.format_column_width(x, [-70, '*', 15])
         utxos = self.wallet.get_utxos()
         messages = [ fmt % (
-            utxo.prevout.to_str(),
-            self.wallet.get_label_for_txid(utxo.prevout.txid.hex()),
+            coin_name(utxo),
+            self.wallet.get_label_for_txid(coin_txid(utxo)),
             self.config.format_amount(utxo.value_sats(), whitespaces=True)
         ) for utxo in utxos]
         self.print_list(2, x, sorted(messages), fmt % ("Outpoint", "Description", "Balance"))

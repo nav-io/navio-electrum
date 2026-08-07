@@ -250,6 +250,13 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
 
         if run_hook('abort_send', self):
             return
+        if self.wallet.wallet_type == 'blsct':
+            # blsct txs are built and signed in one step at send time
+            # (pay_blsct_dialog), with the fee subtracted from the amount;
+            # the generic make_unsigned_transaction pipeline does not apply
+            self.max_button.setChecked(True)
+            self.amount_e.setAmount(self.wallet.get_spendable_balance_sat())
+            return
         outputs = pi.get_onchain_outputs('!')
         if not outputs:
             return
