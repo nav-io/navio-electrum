@@ -516,31 +516,40 @@ class Blsct_Wallet(Abstract_Wallet):
     def get_tx_parents(self, txid: str):
         return {}
 
+    def _header_timestamp(self, height: int) -> Optional[int]:
+        """Timestamp of the block at `height`, from the locally stored
+        header chain (None if unconfirmed or header not downloaded yet)."""
+        if height <= 0 or not self.network:
+            return None
+        header = self.network.blockchain().read_header(height)
+        return header.get('timestamp') if header else None
+
     def get_full_history(self, *, fx=None, onchain_domain=None,
                          include_lightning=True):
         """Qt/QML history model entry point. The Abstract_Wallet version
         walks adb/lightning structures a BLSCT wallet does not have, so
         synthesize the same shape from our recorded outputs."""
-        from .util import OrderedDictWithIndex, Satoshis
+        from .util import OrderedDictWithIndex, Satoshis, timestamp_to_datetime
         local_height = self.network.get_local_height() if self.network else 0
         out = OrderedDictWithIndex()
         for it in self.get_history_items():
             height = it['height']
             conf = max(0, local_height - height + 1) if height > 0 else 0
             amount = Satoshis(it['amount_sat'])
+            timestamp = self._header_timestamp(height)
             out[it['txid']] = {
                 'txid': it['txid'],
                 'lightning': False,
                 'value': amount,
                 'bc_value': amount,
                 'ln_value': Satoshis(0),
-                'timestamp': None,
-                'date': None,
+                'timestamp': timestamp,
+                'date': timestamp_to_datetime(timestamp),
                 'height': height,
                 'confirmations': conf,
                 'label': ', '.join(it.get('memos') or []),
                 'fee_sat': None,
-                'monotonic_timestamp': None,
+                'monotonic_timestamp': timestamp,
             }
         return out
 
