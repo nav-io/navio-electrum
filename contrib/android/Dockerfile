@@ -163,6 +163,7 @@ RUN apt -y update -q \
         zlib1g-dev \
         libncurses-dev \
         cmake \
+        swig \
         libffi-dev \
         libssl-dev \
         automake \

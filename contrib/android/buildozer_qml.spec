@@ -82,7 +82,8 @@ requirements =
     pycryptodomex,
     pyqt6sip,
     pyqt6,
-    libzbar
+    libzbar,
+    navio_blsct
 
 # (str) Presplash of the application
 presplash.filename = %(source.dir)s/electrum/gui/icons/electrum_presplash.png
