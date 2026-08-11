@@ -199,42 +199,6 @@ Pane {
 
                 Heading {
                     Layout.columnSpan: 2
-                    text: qsTr('Lightning')
-                }
-
-                Label {
-                    text: (Config.useGossip ? qsTr('Gossip') : qsTr('Trampoline')) + ':'
-                    color: Material.accentColor
-                }
-                ColumnLayout {
-                    visible: Config.useGossip
-                    Label {
-                        text: qsTr('%1 peers').arg(Network.gossipInfo.peers)
-                    }
-                    Label {
-                        text: qsTr('%1 channels to fetch').arg(Network.gossipInfo.unknown_channels)
-                    }
-                    Label {
-                        text: qsTr('%1 nodes, %2 channels').arg(Network.gossipInfo.db_nodes).arg(Network.gossipInfo.db_channels)
-                    }
-                }
-                Label {
-                    text: qsTr('enabled');
-                    visible: !Config.useGossip
-                }
-
-                Label {
-                    visible: Daemon.currentWallet.isLightning
-                    text: qsTr('Channel peers:');
-                    color: Material.accentColor
-                }
-                Label {
-                    visible: Daemon.currentWallet.isLightning
-                    text: Daemon.currentWallet.lightningNumPeers
-                }
-
-                Heading {
-                    Layout.columnSpan: 2
                     text: qsTr('Proxy')
                 }
 

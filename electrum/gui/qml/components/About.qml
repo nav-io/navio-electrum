@@ -6,7 +6,7 @@ import QtQuick.Controls.Material
 Pane {
     objectName: 'About'
 
-    property string title: qsTr("About Electrum")
+    property string title: qsTr("About Navio Electrum")
 
     Flickable {
         anchors.fill: parent
@@ -72,16 +72,9 @@ Pane {
                 Layout.alignment: Qt.AlignRight
             }
             Label {
-                text: '<a href="https://electrum.org">https://electrum.org</a>'
+                text: '<a href="https://nav.io">https://nav.io</a>'
                 textFormat: Text.RichText
                 onLinkActivated: Qt.openUrlExternally(link)
-            }
-            Label {
-                text: qsTr('Developers')
-                Layout.alignment: Qt.AlignRight
-            }
-            Label {
-                text: 'Thomas Voegtlin\nSomberNight\nSander van Grieken\nFelix B.'
             }
             Item {
                 width: 1
@@ -89,9 +82,11 @@ Pane {
                 Layout.columnSpan: 2
             }
             Label {
-                text: qsTr('Distributed by Electrum Technologies GmbH')
+                text: qsTr('Based on Electrum by Thomas Voegtlin and the Electrum developers')
+                wrapMode: Text.Wrap
                 Layout.columnSpan: 2
-                Layout.alignment: Qt.AlignHCenter
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
             }
         }
     }

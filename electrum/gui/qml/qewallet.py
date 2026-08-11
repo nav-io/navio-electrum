@@ -103,6 +103,7 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         self._confirmedbalance = QEAmount()
         self._unconfirmedbalance = QEAmount()
         self._frozenbalance = QEAmount()
+        self._stakedbalance = QEAmount()
         self._totalbalance = QEAmount()
         self._lightningcanreceive = QEAmount()
         self._minchannelfunding = QEAmount(amount_sat=int(MIN_FUNDING_SAT))
@@ -451,6 +452,8 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
 
     @pyqtProperty(bool, notify=dataChanged)
     def canSignMessage(self):
+        if self.wallet.wallet_type == 'blsct':
+            return False  # BLSCT keystore does not implement message signing
         return not isinstance(self.wallet, Multisig_Wallet) and not self.wallet.is_watching_only()
 
     canGetZeroconfChannelChanged = pyqtSignal()
@@ -474,6 +477,12 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         c, u, x = self.wallet.get_balance()
         self._confirmedbalance.satsInt = c+x
         return self._confirmedbalance
+
+    @pyqtProperty(QEAmount, notify=balanceChanged)
+    def stakedBalance(self):
+        if self.wallet.wallet_type == 'blsct':
+            self._stakedbalance.satsInt = self.wallet.get_staked_balance_sat()
+        return self._stakedbalance
 
     @pyqtProperty(QEAmount, notify=balanceChanged)
     def lightningBalance(self):

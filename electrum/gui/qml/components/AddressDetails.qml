@@ -241,7 +241,7 @@ Pane {
                 TextHighlightPane {
                     Layout.columnSpan: 2
                     Layout.fillWidth: true
-                    visible: !Daemon.currentWallet.isWatchOnly
+                    visible: !Daemon.currentWallet.isWatchOnly && Daemon.currentWallet.walletType != 'blsct'
                     RowLayout {
                         width: parent.width
                         Label {
@@ -289,6 +289,7 @@ Pane {
             FlatButton {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
+                visible: Daemon.currentWallet.walletType != 'blsct'
                 text: addressdetails.isFrozen ? qsTr('Unfreeze address') : qsTr('Freeze address')
                 onClicked: addressdetails.freeze(!addressdetails.isFrozen)
                 icon.source: '../../icons/freeze.png'

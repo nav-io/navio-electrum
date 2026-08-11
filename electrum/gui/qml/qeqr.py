@@ -20,6 +20,7 @@ from electrum.logging import get_logger
 from electrum.qrreader import get_qr_reader
 from electrum.i18n import _
 from electrum.util import profiler, get_asyncio_loop
+from electrum.bip21 import BITCOIN_BIP21_URI_SCHEME
 from electrum.gui.common_qt.util import draw_qr
 
 
@@ -144,7 +145,7 @@ class QEQRImageProvider(QQuickImageProvider):
         # (unknown schemes might be found when a colon is in a serialized TX, which
         # leads to mangling of the tx, so we check for supported schemes.)
         uri = urllib.parse.urlparse(qstr)
-        if uri.scheme and uri.scheme in ['bitcoin', 'lightning']:
+        if uri.scheme and uri.scheme in [BITCOIN_BIP21_URI_SCHEME, 'lightning']:
             # urlencode request parameters
             query = urllib.parse.parse_qs(uri.query)
             query = urllib.parse.urlencode(query, doseq=True, quote_via=urllib.parse.quote)

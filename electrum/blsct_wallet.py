@@ -16,6 +16,7 @@ from typing import Optional, Dict, Tuple, List, Sequence, TYPE_CHECKING
 from aiorpcx import run_in_thread, ignore_after
 
 from . import util
+from .i18n import _
 from .util import (NetworkJobOnDefaultServer, NotEnoughFunds,
                    UserFacingException, OldTaskGroup)
 from .crypto import pw_encode, pw_decode
@@ -149,6 +150,17 @@ class BlsctKeyStore(KeyStore):
         return None
 
     def get_pubkey_provider(self, sequence):
+        return None
+
+    # deterministic-keystore introspection used by wallet info GUIs;
+    # BLSCT keys are not bip32, so there is nothing meaningful to show
+    def get_derivation_prefix(self):
+        return None
+
+    def get_master_public_key(self):
+        return None
+
+    def get_root_fingerprint(self):
         return None
 
     @classmethod
@@ -509,6 +521,13 @@ class Blsct_Wallet(Abstract_Wallet):
                 'amount_sat': it['amount_sat'],
             }
 
+    def get_tx_status(self, tx_hash, tx_mined_info):
+        # raw txs are not stored locally, so the base implementation would
+        # report unconfirmed txs as "unknown"
+        if tx_mined_info.conf == 0:
+            return 0, _('Unconfirmed')
+        return super().get_tx_status(tx_hash, tx_mined_info)
+
     def get_num_parents(self, txid: str):
         # no public parent-tx graph for confidential outputs
         return None
@@ -540,6 +559,8 @@ class Blsct_Wallet(Abstract_Wallet):
             out[it['txid']] = {
                 'txid': it['txid'],
                 'lightning': False,
+                'incoming': it['amount_sat'] > 0,
+                'complete': True,
                 'value': amount,
                 'bc_value': amount,
                 'ln_value': Satoshis(0),

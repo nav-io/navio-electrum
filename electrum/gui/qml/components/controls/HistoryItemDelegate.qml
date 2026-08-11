@@ -43,7 +43,15 @@ Item {
             background: null
 
             onClicked: {
-                if (model.lightning) {
+                if (Daemon.currentWallet.walletType == 'blsct') {
+                    app.stack.push(Qt.resolvedUrl('../BlsctTxDetails.qml'), {
+                        'txid': model.key,
+                        'label': model.label,
+                        'date': model.date,
+                        'confirmations': model.confirmations,
+                        'value': model.value
+                    })
+                } else if (model.lightning) {
                     var page = app.stack.push(Qt.resolvedUrl('../LightningPaymentDetails.qml'), {'key': model.key})
                     page.detailsChanged.connect(function() {
                         // update listmodel when details change

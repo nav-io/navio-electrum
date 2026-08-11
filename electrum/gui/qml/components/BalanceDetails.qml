@@ -166,6 +166,22 @@ Pane {
                         }
 
                         RowLayout {
+                            visible: !Daemon.currentWallet.stakedBalance.isEmpty
+                            Rectangle {
+                                Layout.preferredWidth: constants.iconSizeXSmall
+                                Layout.preferredHeight: constants.iconSizeXSmall
+                                color: constants.colorPiechartUnmatured
+                            }
+                            Label {
+                                text: qsTr('Staked')
+                            }
+                        }
+                        FormattedAmount {
+                            amount: Daemon.currentWallet.stakedBalance
+                            visible: !Daemon.currentWallet.stakedBalance.isEmpty
+                        }
+
+                        RowLayout {
                             visible: !Daemon.currentWallet.unconfirmedBalance.isEmpty
                             Rectangle {
                                 Layout.preferredWidth: constants.iconSizeXSmall

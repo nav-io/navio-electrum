@@ -101,11 +101,12 @@ ElDialog {
             FlatButton {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
-                text: qsTr('Onchain')
+                text: Daemon.currentWallet.canHaveLightning ? qsTr('Onchain') : qsTr('Create request')
                 icon.source: '../../icons/bitcoin.png'
                 onClicked: { dialog.isLightning = false; doAccept() }
             }
             FlatButton {
+                visible: Daemon.currentWallet.canHaveLightning
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
                 enabled: Daemon.currentWallet.isLightning && (Daemon.currentWallet.lightningCanReceive.satsInt

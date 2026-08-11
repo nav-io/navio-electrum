@@ -66,6 +66,9 @@ class QENewWalletWizard(NewWalletWizard, QEAbstractWizard):
         self.navmap_merge({
             'wallet_name': {'gui': 'WCWalletName'},
             'wallet_type': {'gui': 'WCWalletType'},
+            'blsct_create_seed': {'gui': 'WCBlsctCreateSeed'},
+            'blsct_confirm_seed': {'gui': 'WCBlsctConfirmSeed'},
+            'blsct_have_seed': {'gui': 'WCBlsctHaveSeed'},
             'keystore_type': {'gui': 'WCKeystoreType'},
             'create_seed': {'gui': 'WCCreateSeed'},
             'create_ext': {'gui': 'WCEnterExt'},

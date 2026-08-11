@@ -104,6 +104,10 @@ Item {
     }
 
     function payOnchain(invoicedialog, invoice) {
+        if (Daemon.currentWallet.walletType == 'blsct') {
+            payBlsct(invoicedialog, invoice)
+            return
+        }
         var dialog = confirmPaymentDialog.createObject(mainView, {
                 address: invoice.address,
                 satoshis: invoice.amountOverride.isEmpty
@@ -127,6 +131,25 @@ Item {
                 invoicedialog.broadcastTxid = dialog.finalizer.finalizedTxid
                 dialog.finalizer.signAndSend()
             }
+        })
+        dialog.open()
+    }
+
+    function payBlsct(invoicedialog, invoice) {
+        var dialog = blsctConfirmPaymentDialog.createObject(mainView, {
+                address: invoice.address,
+                satoshis: invoice.amountOverride.isEmpty
+                    ? invoice.amount
+                    : invoice.amountOverride,
+                message: invoice.message
+        })
+        dialog.accepted.connect(function() {
+            if (invoice.canSave)
+                if (!invoice.saveInvoice())
+                    return
+            // store txid in invoicedialog so the dialog can detect broadcast success
+            invoicedialog.broadcastTxid = dialog.finalizer.builtTxid
+            dialog.finalizer.signAndSend()
         })
         dialog.open()
     }
@@ -202,6 +225,8 @@ Item {
             }
         }
         MenuItem {
+            visible: Daemon.currentWallet.walletType != 'blsct'
+            height: visible ? implicitHeight : 0
             icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor
             icon.source: '../../icons/lightning.png'
             action: Action {
@@ -212,6 +237,20 @@ Item {
         }
 
         MenuItem {
+            visible: Daemon.currentWallet.walletType == 'blsct'
+            height: visible ? implicitHeight : 0
+            icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor
+            icon.source: '../../icons/tab_coins.png'
+            action: Action {
+                text: qsTr('Staking')
+                enabled: app.stack.currentItem.objectName != 'Staking'
+                onTriggered: menu.openPage(Qt.resolvedUrl('Staking.qml'))
+            }
+        }
+
+        MenuItem {
+            visible: Daemon.currentWallet.walletType != 'blsct'
+            height: visible ? implicitHeight : 0
             icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor
             icon.source: '../../icons/pen.png'
             action: Action {
@@ -227,6 +266,8 @@ Item {
         }
 
         MenuItem {
+            visible: Daemon.currentWallet.walletType != 'blsct'
+            height: visible ? implicitHeight : 0
             icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor
             icon.source: '../../icons/sweep.png'
             action: Action {
@@ -653,7 +694,7 @@ Item {
                             capturedHistoryModel.updateTxLabel(capturedKey, page.label)
                         }
                     )
-                } else {
+                } else if (Daemon.currentWallet.walletType != 'blsct') {
                     let paidTxid = getPaidTxid()
                     var page = app.stack.push(Qt.resolvedUrl('TxDetails.qml'), {'txid': paidTxid})
                     page.detailsChanged.connect(function() {
@@ -709,6 +750,30 @@ Item {
             // the child finalizer when currentWallet disappears, but we need
             // it long enough for the finalizer to finish..
             // onClosed: destroy()
+        }
+    }
+
+    Component {
+        id: blsctConfirmPaymentDialog
+        BlsctConfirmTxDialog {
+            id: _blsctConfirmPaymentDialog
+            finalizer: BlsctFinalizer {
+                wallet: Daemon.currentWallet
+                onFinished: (txid) => {
+                    _blsctConfirmPaymentDialog.destroy()
+                }
+                onSendFailed: (message) => {
+                    var dialog = app.messageDialog.createObject(mainView, {
+                        title: qsTr('Error'),
+                        text: [qsTr('Could not send tx'), message].join('\n\n'),
+                        iconSource: '../../../icons/warning.png'
+                    })
+                    dialog.open()
+                }
+                onAuthRequired: (method, authMessage) => {
+                    app.handleAuthRequired(_blsctConfirmPaymentDialog.finalizer, method, authMessage)
+                }
+            }
         }
     }
 

@@ -34,6 +34,8 @@ from .qeqrscanner import QEQRScanner
 from .qebitcoin import QEBitcoin
 from .qefx import QEFX
 from .qetxfinalizer import QETxFinalizer, QETxRbfFeeBumper, QETxCpfpFeeBumper, QETxCanceller, QETxSweepFinalizer, FeeSlider
+from .qeblsctfinalizer import QEBlsctFinalizer
+from .qestaking import QEStaking
 from .qeinvoice import QEInvoice, QEInvoiceParser
 from .qepiresolver import QEPIResolver
 from .qerequestdetails import QERequestDetails
@@ -177,7 +179,7 @@ class QEAppController(BaseCrashReporter, QObject):
             global notification
             if not notification:
                 from plyer import notification
-            notification.notify('Electrum', message, app_icon=icon, app_name='Electrum')
+            notification.notify('Navio Electrum', message, app_icon=icon, app_name='Navio Electrum')
         except ImportError:
             self.logger.warning('Notification: needs plyer; `python3 -m pip install plyer`')
         except Exception as e:
@@ -494,6 +496,8 @@ class ElectrumQmlApplication(QGuiApplication):
         qmlRegisterType(QEQRScanner, 'org.electrum', 1, 0, 'QRScanner')
         qmlRegisterType(QEFX, 'org.electrum', 1, 0, 'FX')
         qmlRegisterType(QETxFinalizer, 'org.electrum', 1, 0, 'TxFinalizer')
+        qmlRegisterType(QEBlsctFinalizer, 'org.electrum', 1, 0, 'BlsctFinalizer')
+        qmlRegisterType(QEStaking, 'org.electrum', 1, 0, 'StakingBackend')
         qmlRegisterType(QEPIResolver, 'org.electrum', 1, 0, 'PIResolver')
         qmlRegisterType(QEInvoice, 'org.electrum', 1, 0, 'Invoice')
         qmlRegisterType(QEInvoiceParser, 'org.electrum', 1, 0, 'InvoiceParser')
