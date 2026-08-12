@@ -424,6 +424,10 @@ class NewWalletWizard(KeystoreWizard):
                 'next': 'wallet_password',
                 'last': lambda d: self.is_single_password(),
             },
+            'blsct_have_viewkey': {
+                # watch-only: no password page, nothing secret to protect
+                'last': lambda d: True,
+            },
             'keystore_type': {
                 'next': self.on_keystore_type
             },
@@ -528,6 +532,7 @@ class NewWalletWizard(KeystoreWizard):
         return {
             'blsct': 'blsct_create_seed',
             'blsct_restore': 'blsct_have_seed',
+            'blsct_watch': 'blsct_have_viewkey',
             'standard': 'keystore_type',
             '2fa': 'trustedcoin_start',
             'multisig': 'multisig',
@@ -703,12 +708,18 @@ class NewWalletWizard(KeystoreWizard):
             storage = WalletStorage(path)
         except StorageReadWriteError as e:
             raise UserFacingException(e)
+        from .blsct_wallet import is_blsct_view_key_str
         seed_text = ' '.join(data['seed'].split())
-        if len(seed_text) == 64 and all(c in '0123456789abcdefABCDEF' for c in seed_text):
+        if is_blsct_view_key_str(seed_text):
+            vk, sp = seed_text.lower().split(':')
+            k = BlsctKeyStore.from_view_key(vk, sp)
+        elif len(seed_text) == 64 and all(c in '0123456789abcdefABCDEF' for c in seed_text):
             k = BlsctKeyStore.from_seed_hex(seed_text.lower())
         else:
             k = BlsctKeyStore.from_mnemonic(seed_text)
         password = data.get('password') or None
+        if k.is_watching_only():
+            password = None  # nothing secret to protect; view key must stay cleartext
         if data.get('encrypt') and password:
             storage.set_password(password, enc_version=StorageEncryptionVersion.USER_PASSWORD)
         db = WalletDB('', storage=storage, upgrade=True)
@@ -721,7 +732,7 @@ class NewWalletWizard(KeystoreWizard):
         return
 
     def create_storage(self, path: str, data: dict):
-        if data['wallet_type'] in ('blsct', 'blsct_restore'):
+        if data['wallet_type'] in ('blsct', 'blsct_restore', 'blsct_watch'):
             return self._create_blsct_storage(path, data)
         assert data['wallet_type'] in ['standard', '2fa', 'imported', 'multisig']
 

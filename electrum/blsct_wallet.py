@@ -75,7 +75,7 @@ class BlsctKeyStore(KeyStore):
     # -- password handling ---------------------------------------------------
 
     def may_have_password(self):
-        return True
+        return not self.is_watching_only()
 
     def has_password(self):
         return self._encrypted
@@ -88,6 +88,8 @@ class BlsctKeyStore(KeyStore):
         self.get_seed_hex(password)
 
     def update_password(self, old_password, new_password):
+        if self.is_watching_only():
+            return  # nothing secret to encrypt; view key must stay cleartext to scan
         self.check_password(old_password)
         if new_password == '':
             new_password = None
@@ -133,7 +135,8 @@ class BlsctKeyStore(KeyStore):
         return True
 
     def is_watching_only(self):
-        return False
+        # view-key-only keystore: can scan and see balances, cannot spend
+        return not bool(self.seed)
 
     def sign_message(self, sequence, message, password, *, script_type=None) -> bytes:
         raise UserFacingException('message signing is not implemented for BLSCT wallets')
@@ -180,6 +183,17 @@ class BlsctKeyStore(KeyStore):
         ks = cls.from_seed_hex(entropy.hex())
         ks.mnemonic = ' '.join(mnemonic.split())
         return ks
+
+    @classmethod
+    def from_view_key(cls, view_key_hex: str, spend_pub_hex: str) -> 'BlsctKeyStore':
+        """Watch-only keystore: private view key + public spend key.
+        Can scan the chain and recover amounts, but cannot spend."""
+        # validate by constructing a scanning ring
+        BlsctKeyRing.from_view_key(view_key_hex, spend_pub_hex)
+        return cls({
+            'view_key': view_key_hex,
+            'spend_pub': spend_pub_hex,
+        })
 
 
 class BlsctUtxo:
@@ -244,7 +258,7 @@ class Blsct_Wallet(Abstract_Wallet):
         if not d or d.get('type') != 'blsct':
             raise Exception('missing/invalid blsct keystore')
         self.keystore = BlsctKeyStore(d)
-        if not self.keystore._encrypted:
+        if not self.keystore._encrypted and self.keystore.seed:
             self.keyring = BlsctKeyRing(self.keystore.seed)
         elif self.keystore.view_key_hex and self.keystore.spend_pub_hex:
             # encrypted keystore: scan with the cleartext view key; the full
@@ -291,7 +305,7 @@ class Blsct_Wallet(Abstract_Wallet):
         return 0
 
     def is_watching_only(self):
-        return False
+        return self.keystore.is_watching_only()
 
     def has_seed(self):
         return self.keystore.has_seed()
@@ -699,7 +713,19 @@ class Blsct_Wallet(Abstract_Wallet):
 
     # ------------------------------------------------------------------ send
 
+    def get_view_key_pair(self) -> Tuple[str, str]:
+        """(private view key hex, public spend key hex) — enough to create a
+        watch-only wallet that sees this wallet's history and balances."""
+        return (self.keystore.view_key_hex, self.keystore.spend_pub_hex)
+
+    def get_view_key_str(self) -> str:
+        vk, sp = self.get_view_key_pair()
+        return f'{vk}:{sp}'
+
     def _spending_keyring(self, password) -> BlsctKeyRing:
+        if self.is_watching_only():
+            raise UserFacingException(
+                _('This is a watching-only wallet: it cannot spend or stake.'))
         keyring = self.keyring
         if self.keystore.has_password():
             self.keystore.check_password(password)
@@ -1154,10 +1180,34 @@ def create_new_blsct_wallet(*, path, config, password=None, encrypt_file=True,
                                 creation_height=creation_height or 0)
 
 
+def is_blsct_view_key_str(text: str) -> bool:
+    """'<view_key_hex(64)>:<spend_pub_hex(96)>' — the watch-only import format."""
+    text = text.strip()
+    parts = text.split(':')
+    if len(parts) != 2:
+        return False
+    vk, sp = parts
+    if len(vk) != 64 or len(sp) != 96:
+        return False
+    if not all(c in '0123456789abcdefABCDEF' for c in vk + sp):
+        return False
+    try:
+        BlsctKeyRing.from_view_key(vk.lower(), sp.lower())
+        return True
+    except Exception:
+        return False
+
+
 def restore_blsct_wallet_from_text(text: str, *, path, config, password=None,
                                    encrypt_file=True,
                                    creation_height: int = 0) -> dict:
     text = ' '.join(text.split())
+    if is_blsct_view_key_str(text):
+        vk, sp = text.lower().split(':')
+        return _create_blsct_watch_wallet(vk, sp, path=path, config=config,
+                                          password=password,
+                                          encrypt_file=encrypt_file,
+                                          creation_height=creation_height)
     if len(text) == 64 and all(ch in '0123456789abcdefABCDEF' for ch in text):
         seed_hex = text.lower()
     else:
@@ -1165,6 +1215,29 @@ def restore_blsct_wallet_from_text(text: str, *, path, config, password=None,
     return _create_blsct_wallet(seed_hex, path=path, config=config,
                                 password=password, encrypt_file=encrypt_file,
                                 creation_height=creation_height)
+
+
+def _create_blsct_watch_wallet(view_key_hex, spend_pub_hex, *, path, config,
+                               password, encrypt_file, creation_height) -> dict:
+    from .storage import WalletStorage, StorageEncryptionVersion
+    from .wallet_db import WalletDB
+    from .wallet import Wallet
+    storage = WalletStorage(path, allow_partial_writes=config.WALLET_PARTIAL_WRITES)
+    if storage.file_exists():
+        raise UserFacingException("Remove the existing wallet first!")
+    if encrypt_file and password:
+        storage.set_password(password, StorageEncryptionVersion.USER_PASSWORD)
+    db = WalletDB('', storage=storage, upgrade=True)
+    ks = BlsctKeyStore.from_view_key(view_key_hex, spend_pub_hex)
+    db.put('keystore', ks.dump())
+    db.put('wallet_type', 'blsct')
+    db.set_keystore_encryption(False)
+    wallet = Wallet(db, config=config)
+    wallet.blsct_sync['creation_height'] = creation_height
+    wallet.save_db()
+    return {'wallet': wallet, 'watching_only': True,
+            'msg': 'Watch-only BLSCT wallet created. It can see balances and '
+                   'history but cannot spend or stake.'}
 
 
 def _create_blsct_wallet(seed_hex, *, path, config, password, encrypt_file,

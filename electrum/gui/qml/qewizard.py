@@ -69,6 +69,7 @@ class QENewWalletWizard(NewWalletWizard, QEAbstractWizard):
             'blsct_create_seed': {'gui': 'WCBlsctCreateSeed'},
             'blsct_confirm_seed': {'gui': 'WCBlsctConfirmSeed'},
             'blsct_have_seed': {'gui': 'WCBlsctHaveSeed'},
+            'blsct_have_viewkey': {'gui': 'WCBlsctHaveViewKey'},
             'keystore_type': {'gui': 'WCKeystoreType'},
             'create_seed': {'gui': 'WCCreateSeed'},
             'create_ext': {'gui': 'WCEnterExt'},

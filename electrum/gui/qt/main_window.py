@@ -793,7 +793,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         self.labels_menu.addAction(_("&Export"), self.do_export_labels)
 
         if self.wallet.wallet_type == 'blsct':
-            self.wallet_menu.addAction(_("Sta&king"), self.show_staking_dialog)
+            if not self.wallet.is_watching_only():
+                self.wallet_menu.addAction(_("Sta&king"), self.show_staking_dialog)
+            self.wallet_menu.addAction(_("&View key"), self.show_view_key_dialog)
 
         self.wallet_menu.addAction(_("Find"), self.toggle_search).setShortcut(QKeySequence("Ctrl+F"))
         self.wallet_menu.addSeparator()
@@ -2036,6 +2038,20 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
     def show_staking_dialog(self):
         from .staking_dialog import StakingDialog
         StakingDialog(self).exec()
+
+    def show_view_key_dialog(self):
+        vk_str = self.wallet.get_view_key_str()
+        self.show_message(
+            '\n'.join([
+                _('View key (share to let someone watch this wallet):'),
+                '',
+                vk_str,
+                '',
+                _('Anyone with this string can see this wallet\'s balances and '
+                  'history, but cannot spend or stake. Use "Watch-only wallet '
+                  '(view key)" when creating a wallet to import it.'),
+            ]),
+            title=_('View key'))
 
     def show_wallet_info(self):
         from .wallet_info_dialog import WalletInfoDialog

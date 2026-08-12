@@ -116,6 +116,11 @@ class QEBitcoin(QObject):
         return is_address(addr)
 
     @pyqtSlot(str, result=bool)
+    def isBlsctViewKey(self, text: str):
+        from electrum.blsct_wallet import is_blsct_view_key_str
+        return is_blsct_view_key_str(text)
+
+    @pyqtSlot(str, result=bool)
     def isBlsctSeed(self, text: str):
         from electrum.navio_blsct import is_bip39_mnemonic
         text = text.strip()

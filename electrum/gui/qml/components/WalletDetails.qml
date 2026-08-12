@@ -493,9 +493,25 @@ Pane {
             FlatButton {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
+                visible: !Daemon.currentWallet.isWatchOnly
                 text: qsTr('Change Password')
                 onClicked: Daemon.startChangePassword()
                 icon.source: '../../icons/lock.png'
+            }
+            FlatButton {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 1
+                visible: Daemon.currentWallet.walletType == 'blsct'
+                text: qsTr('View key')
+                icon.source: '../../icons/eye1.png'
+                onClicked: {
+                    var dialog = app.genericShareDialog.createObject(app, {
+                        title: qsTr('View key'),
+                        text: Daemon.currentWallet.viewKeyStr,
+                        text_help: qsTr('Anyone with this string can see this wallet\'s balances and history, but cannot spend or stake. Import it with "Watch-only wallet (view key)" when creating a wallet.')
+                    })
+                    dialog.open()
+                }
             }
             FlatButton {
                 Layout.fillWidth: true

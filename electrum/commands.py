@@ -320,11 +320,12 @@ class Commands(Logger):
 
     @command('')
     async def restore(self, text, password=None, encrypt_file=True, wallet_path=None, creation_height=0):
-        """Restore a Navio BLSCT wallet from a 24-word seed phrase or a
-        64-char hex seed.
+        """Restore a Navio BLSCT wallet from a 24-word seed phrase, a
+        64-char hex seed, or a view key string ('viewkey:spendpub', as shown
+        by getviewkey) for a watch-only wallet.
         If you want to be prompted for an argument, type '?' or ':' (concealed)
 
-        arg:str:text:24-word seed phrase or hex seed
+        arg:str:text:24-word seed phrase, hex seed, or view key string
         arg:bool:encrypt_file:Whether the file on disk should be encrypted with the provided password
         arg:int:creation_height:Block height to start scanning from (0 = full rescan)
         """
@@ -596,6 +597,15 @@ class Commands(Logger):
         """Get seed phrase. Print the generation seed of your wallet."""
         s = wallet.get_seed(password)
         return s
+
+    @command('w')
+    async def getviewkey(self, wallet: Abstract_Wallet = None):
+        """Get the wallet's view key string ('viewkey:spendpub'). Anyone with
+        this string can see the wallet's balances and history (but cannot
+        spend); use it with `restore` to create a watch-only wallet."""
+        if not hasattr(wallet, 'get_view_key_str'):
+            raise UserFacingException('view keys only exist for BLSCT wallets')
+        return wallet.get_view_key_str()
 
     @command('wp')
     async def payto(self, destination, amount, fee=None, memo=None, from_coins=None,

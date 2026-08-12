@@ -237,7 +237,7 @@ Item {
         }
 
         MenuItem {
-            visible: Daemon.currentWallet.walletType == 'blsct'
+            visible: Daemon.currentWallet.walletType == 'blsct' && !Daemon.currentWallet.isWatchOnly
             height: visible ? implicitHeight : 0
             icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor
             icon.source: '../../icons/tab_coins.png'

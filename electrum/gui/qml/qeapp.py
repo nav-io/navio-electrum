@@ -273,6 +273,23 @@ class QEAppController(BaseCrashReporter, QObject):
         it = jIntent.createChooser(sendIntent, cast('java.lang.CharSequence', jString(title)))
         jpythonActivity.startActivity(it)
 
+    @pyqtSlot(result=str)
+    def currentChainName(self):
+        from electrum import constants
+        return constants.net.NET_NAME
+
+    @pyqtSlot(str, result=bool)
+    def setDefaultChain(self, chain_name: str) -> bool:
+        """Persist the chain to use from the next launch on. The app must be
+        restarted for it to take effect."""
+        from electrum.simple_config import SimpleConfig
+        try:
+            SimpleConfig.set_persisted_default_chain(chain_name)
+            return True
+        except Exception as e:
+            self.logger.error(f'could not persist default chain: {e!r}')
+            return False
+
     @pyqtSlot(result=bool)
     def isMaxBrightnessOnQrDisplayEnabled(self):
         return self.config.GUI_QML_SET_MAX_BRIGHTNESS_ON_QR_DISPLAY

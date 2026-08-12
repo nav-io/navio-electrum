@@ -478,6 +478,12 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         self._confirmedbalance.satsInt = c+x
         return self._confirmedbalance
 
+    @pyqtProperty(str, notify=dataChanged)
+    def viewKeyStr(self):
+        if self.wallet.wallet_type != 'blsct':
+            return ''
+        return self.wallet.get_view_key_str()
+
     @pyqtProperty(QEAmount, notify=balanceChanged)
     def stakedBalance(self):
         if self.wallet.wallet_type == 'blsct':
