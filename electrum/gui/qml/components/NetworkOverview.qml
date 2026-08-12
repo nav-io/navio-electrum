@@ -266,16 +266,6 @@ Pane {
                     dialog.open()
                 }
             }
-            FlatButton {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 1
-                text: qsTr('Nostr Settings');
-                icon.source: '../../icons/nostr.png'
-                onClicked: {
-                    var dialog = nostrConfig.createObject(root)
-                    dialog.open()
-                }
-            }
         }
     }
     property color navigationBarBackgroundColor: constants.highlightBackground
@@ -294,10 +284,4 @@ Pane {
         }
     }
 
-    Component {
-        id: nostrConfig
-        NostrConfigDialog {
-            onClosed: destroy()
-        }
-    }
 }

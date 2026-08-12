@@ -26,7 +26,6 @@ from electrum.gui.common_qt.util import QtEventListener, qt_event_listener
 
 from .auth import AuthMixin, auth_protect
 from .qeaddresslistmodel import QEAddressCoinListModel
-from .qechannellistmodel import QEChannelListModel
 from .qeinvoicelistmodel import QEInvoiceListModel, QERequestListModel
 from .qetransactionlistmodel import QETransactionListModel
 from .qetypes import QEAmount
@@ -97,7 +96,6 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         self._addressCoinModel = None
         self._requestModel = None
         self._invoiceModel = None
-        self._channelModel = None
 
         self._lightningbalance = QEAmount()
         self._confirmedbalance = QEAmount()
@@ -325,13 +323,6 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         if self._invoiceModel is None:
             self._invoiceModel = QEInvoiceListModel(self.wallet)
         return self._invoiceModel
-
-    channelModelChanged = pyqtSignal()
-    @pyqtProperty(QEChannelListModel, notify=channelModelChanged)
-    def channelModel(self):
-        if self._channelModel is None:
-            self._channelModel = QEChannelListModel(self.wallet)
-        return self._channelModel
 
     nameChanged = pyqtSignal()
     @pyqtProperty(str, notify=nameChanged)

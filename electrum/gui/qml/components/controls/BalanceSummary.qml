@@ -12,12 +12,10 @@ Item {
     property string formattedConfirmedBalance
     property string formattedTotalBalance
     property string formattedTotalBalanceFiat
-    property string formattedLightningBalance
 
     function setBalances() {
         root.formattedConfirmedBalance = Config.formatSats(Daemon.currentWallet.confirmedBalance)
         root.formattedTotalBalance = Config.formatSats(Daemon.currentWallet.totalBalance)
-        root.formattedLightningBalance = Config.formatSats(Daemon.currentWallet.lightningBalance)
         if (Daemon.fx.enabled) {
             root.formattedTotalBalanceFiat = Daemon.fx.fiatValue(Daemon.currentWallet.totalBalance, false)
         }
@@ -70,60 +68,6 @@ Item {
                 text: Daemon.fx.fiatCurrency
             }
 
-            RowLayout {
-                Layout.alignment: Qt.AlignRight
-                visible: Daemon.currentWallet.isLightning
-                Image {
-                    Layout.preferredWidth: constants.iconSizeSmall
-                    Layout.preferredHeight: constants.iconSizeSmall
-                    source: '../../../icons/lightning.png'
-                }
-                Label {
-                    text: qsTr('Lightning') + ':'
-                    font.pixelSize: constants.fontSizeSmall
-                    color: Material.accentColor
-                }
-            }
-            Label {
-                visible: Daemon.currentWallet.isLightning
-                Layout.alignment: Qt.AlignRight
-                text: formattedLightningBalance
-                font.family: FixedFont
-            }
-            Label {
-                visible: Daemon.currentWallet.isLightning
-                font.pixelSize: constants.fontSizeSmall
-                color: Material.accentColor
-                text: Config.baseUnit
-            }
-
-            RowLayout {
-                Layout.alignment: Qt.AlignRight
-                visible: Daemon.currentWallet.isLightning
-                Image {
-                    Layout.preferredWidth: constants.iconSizeSmall
-                    Layout.preferredHeight: constants.iconSizeSmall
-                    source: '../../../icons/bitcoin.png'
-                }
-                Label {
-                    text: qsTr('On-chain') + ':'
-                    font.pixelSize: constants.fontSizeSmall
-                    color: Material.accentColor
-                }
-            }
-            Label {
-                id: formattedConfirmedBalanceLabel
-                visible: Daemon.currentWallet.isLightning
-                Layout.alignment: Qt.AlignRight
-                text: formattedConfirmedBalance
-                font.family: FixedFont
-            }
-            Label {
-                visible: Daemon.currentWallet.isLightning
-                font.pixelSize: constants.fontSizeSmall
-                color: Material.accentColor
-                text: Config.baseUnit
-            }
         }
 
     }
@@ -177,11 +121,6 @@ Item {
         function onBalanceChanged() {
             setBalances()
         }
-    }
-
-    FontMetrics {
-        id: fontMetrics
-        font: formattedConfirmedBalanceLabel.font
     }
 
     Component.onCompleted: setBalances()

@@ -15,17 +15,6 @@ Pane {
 
     property bool _is2fa: Daemon.currentWallet && Daemon.currentWallet.walletType == '2fa'
 
-    function enableLightning() {
-        var dialog = app.messageDialog.createObject(rootItem, {
-            title: qsTr('Enable Lightning for this wallet?'),
-            yesno: true
-        })
-        dialog.accepted.connect(function() {
-            Daemon.currentWallet.enableLightning()
-        })
-        dialog.open()
-    }
-
     function importAddressesKeys() {
         var dialog = importAddressesKeysDialog.createObject(rootItem)
         dialog.open()
@@ -106,14 +95,6 @@ Pane {
                             font.pixelSize: constants.fontSizeSmall
                             font.bold: true
                             iconSource: '../../../icons/seed.png'
-                        }
-                        Tag {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: qsTr('Lightning')
-                            visible: Daemon.currentWallet.isLightning
-                            font.pixelSize: constants.fontSizeSmall
-                            font.bold: true
-                            iconSource: '../../../icons/lightning.png'
                         }
                         Tag {
                             Layout.alignment: Qt.AlignHCenter
@@ -251,42 +232,6 @@ Pane {
                                 wrapMode: Text.Wrap
                                 font.family: FixedFont
                                 font.pixelSize: constants.fontSizeMedium
-                            }
-                        }
-
-                        Label {
-                            Layout.columnSpan: 2
-                            Layout.topMargin: constants.paddingSmall
-                            visible: Daemon.currentWallet.isLightning
-                            text: qsTr('Lightning Node ID')
-                            color: Material.accentColor
-                        }
-
-                        TextHighlightPane {
-                            Layout.columnSpan: 2
-                            Layout.fillWidth: true
-                            visible: Daemon.currentWallet.isLightning
-
-                            RowLayout {
-                                width: parent.width
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: Daemon.currentWallet.lightningNodePubkey
-                                    wrapMode: Text.Wrap
-                                    font.family: FixedFont
-                                    font.pixelSize: constants.fontSizeMedium
-                                }
-                                ToolButton {
-                                    icon.source: '../../icons/share.png'
-                                    icon.color: 'transparent'
-                                    onClicked: {
-                                        var dialog = app.genericShareDialog.createObject(rootItem, {
-                                            title: qsTr('Lightning Node ID'),
-                                            text: Daemon.currentWallet.lightningNodePubkey
-                                        })
-                                        dialog.open()
-                                    }
-                                }
                             }
                         }
 
@@ -522,14 +467,6 @@ Pane {
                         : qsTr('Add keys')
                 icon.source: '../../icons/add.png'
                 onClicked: rootItem.importAddressesKeys()
-            }
-            FlatButton {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 1
-                text: qsTr('Enable Lightning')
-                onClicked: rootItem.enableLightning()
-                visible: Daemon.currentWallet && Daemon.currentWallet.canHaveLightning && !Daemon.currentWallet.isLightning
-                icon.source: '../../icons/lightning.png'
             }
         }
     }

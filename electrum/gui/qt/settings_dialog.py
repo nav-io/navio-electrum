@@ -112,33 +112,6 @@ class SettingsDialog(QDialog, QtEventListener):
                 self.app.update_status_signal.emit()
         nz.valueChanged.connect(on_nz)
 
-        # lightning
-        trampoline_cb = checkbox_from_configvar(self.config.cv.LIGHTNING_USE_GOSSIP)
-        trampoline_cb.setChecked(not self.config.LIGHTNING_USE_GOSSIP)
-
-        def on_trampoline_checked(_x):
-            use_trampoline = trampoline_cb.isChecked()
-            if not use_trampoline:
-                if not window.question('\n'.join([
-                        _("Are you sure you want to disable trampoline?"),
-                        _("Without this option, Navio Electrum will need to sync with the Lightning network on every start."),
-                        _("This may impact the reliability of your payments."),
-                ]), parent=self):
-                    trampoline_cb.setCheckState(Qt.CheckState.Checked)
-                    return
-            self.config.LIGHTNING_USE_GOSSIP = not use_trampoline
-            if self.network:
-                if not use_trampoline:
-                    self.network.start_gossip()
-                else:
-                    self.network.run_from_another_thread(
-                        self.network.stop_gossip())
-            util.trigger_callback('ln_gossip_sync_progress')
-            # FIXME: update all wallet windows
-            util.trigger_callback('channels_updated', self.wallet)
-        trampoline_cb.stateChanged.connect(on_trampoline_checked)
-
-
         alias_label = HelpLabel.from_configvar(self.config.cv.OPENALIAS_ID)
         alias = self.config.OPENALIAS_ID
         self.alias_e = QLineEdit(alias)
@@ -392,8 +365,6 @@ class SettingsDialog(QDialog, QtEventListener):
         units_widgets.append((nz_label, nz))
         units_widgets.append((msat_cb, None))
         units_widgets.append((thousandsep_cb, None))
-        lightning_widgets = []
-        lightning_widgets.append((trampoline_cb, None))
         fiat_widgets = []
         fiat_widgets.append((QLabel(_('Fiat currency')), ccy_combo))
         fiat_widgets.append((QLabel(_('Source')), ex_combo))
@@ -410,7 +381,6 @@ class SettingsDialog(QDialog, QtEventListener):
             (network_widgets, _('Network')),
             (units_widgets, _('Units')),
             (fiat_widgets, _('Fiat')),
-            (lightning_widgets, _('Lightning')),
             (misc_widgets, _('Misc')),
         ]
         for widgets, name in tabs_info:

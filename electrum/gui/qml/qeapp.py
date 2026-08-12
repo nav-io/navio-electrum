@@ -42,10 +42,6 @@ from .qerequestdetails import QERequestDetails
 from .qetypes import QEAmount, QEBytes
 from .qeaddressdetails import QEAddressDetails
 from .qetxdetails import QETxDetails
-from .qechannelopener import QEChannelOpener
-from .qelnpaymentdetails import QELnPaymentDetails
-from .qechanneldetails import QEChannelDetails
-from .qeswaphelper import QESwapHelper
 from .qewizard import QENewWalletWizard, QEServerConnectWizard, QETermsOfUseWizard
 from .qemodelfilter import QEFilterProxyModel
 from .qebip39recovery import QEBip39RecoveryListModel
@@ -520,10 +516,6 @@ class ElectrumQmlApplication(QGuiApplication):
         qmlRegisterType(QEInvoiceParser, 'org.electrum', 1, 0, 'InvoiceParser')
         qmlRegisterType(QEAddressDetails, 'org.electrum', 1, 0, 'AddressDetails')
         qmlRegisterType(QETxDetails, 'org.electrum', 1, 0, 'TxDetails')
-        qmlRegisterType(QEChannelOpener, 'org.electrum', 1, 0, 'ChannelOpener')
-        qmlRegisterType(QELnPaymentDetails, 'org.electrum', 1, 0, 'LnPaymentDetails')
-        qmlRegisterType(QEChannelDetails, 'org.electrum', 1, 0, 'ChannelDetails')
-        qmlRegisterType(QESwapHelper, 'org.electrum', 1, 0, 'SwapHelper')
         qmlRegisterType(QERequestDetails, 'org.electrum', 1, 0, 'RequestDetails')
         qmlRegisterType(QETxRbfFeeBumper, 'org.electrum', 1, 0, 'TxRbfFeeBumper')
         qmlRegisterType(QETxCpfpFeeBumper, 'org.electrum', 1, 0, 'TxCpfpFeeBumper')
