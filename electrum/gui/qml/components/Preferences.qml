@@ -38,6 +38,46 @@ Pane {
 
                     PrefsHeading {
                         Layout.columnSpan: 2
+                        text: qsTr('Network')
+                    }
+
+                    Label {
+                        text: qsTr('Chain')
+                    }
+
+                    ElComboBox {
+                        id: networkCombo
+                        model: ['mainnet', 'testnet']
+
+                        property string _current: AppController.currentChainName()
+
+                        Component.onCompleted: {
+                            currentIndex = Math.max(0, model.indexOf(_current))
+                        }
+
+                        onActivated: {
+                            var selected = model[currentIndex]
+                            if (selected == networkCombo._current)
+                                return
+                            var dialog = app.messageDialog.createObject(app, {
+                                title: qsTr('Switch to %1?').arg(selected),
+                                text: [qsTr('Wallets exist per network.'),
+                                       qsTr('Navio Electrum will close now; reopen it to continue on %1.').arg(selected)].join(' '),
+                                yesno: true
+                            })
+                            dialog.accepted.connect(function() {
+                                AppController.setDefaultChain(selected)
+                                Qt.quit()
+                            })
+                            dialog.rejected.connect(function() {
+                                networkCombo.currentIndex = networkCombo.model.indexOf(networkCombo._current)
+                            })
+                            dialog.open()
+                        }
+                    }
+
+                    PrefsHeading {
+                        Layout.columnSpan: 2
                         text: qsTr('User Interface')
                     }
 

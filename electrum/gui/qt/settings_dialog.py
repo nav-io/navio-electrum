@@ -350,6 +350,39 @@ class SettingsDialog(QDialog, QtEventListener):
         self.history_rates_cb.stateChanged.connect(on_history_rates)
         ex_combo.currentIndexChanged.connect(on_exchange)
 
+        # network / chain selection; applies from the next launch
+        from electrum import constants
+        from PyQt6.QtWidgets import QMessageBox
+        chain_label = QLabel(_('Chain'))
+        chain_combo = QComboBox()
+        chain_combo.addItems(['mainnet', 'testnet'])
+        _current_chain = constants.net.NET_NAME
+        idx = chain_combo.findText(_current_chain)
+        chain_combo.setCurrentIndex(max(0, idx))
+        self._reverting_chain = False
+
+        def on_chain_changed(name):
+            if self._reverting_chain or name == _current_chain:
+                return
+            answer = QMessageBox.question(
+                self, _('Switch network?'),
+                '\n'.join([
+                    _('Wallets exist per network.'),
+                    _('Navio Electrum will close now; reopen it to continue on {}.').format(name),
+                ]))
+            if answer == QMessageBox.StandardButton.Yes:
+                from electrum.simple_config import SimpleConfig
+                SimpleConfig.set_persisted_default_chain(name)
+                self.app.quit()
+            else:
+                self._reverting_chain = True
+                chain_combo.setCurrentText(_current_chain)
+                self._reverting_chain = False
+        chain_combo.currentTextChanged.connect(on_chain_changed)
+
+        network_widgets = []
+        network_widgets.append((chain_label, chain_combo))
+
         gui_widgets = []
         gui_widgets.append((lang_label, lang_combo))
         gui_widgets.append((colortheme_label, colortheme_combo))
@@ -374,6 +407,7 @@ class SettingsDialog(QDialog, QtEventListener):
 
         tabs_info = [
             (gui_widgets, _('Appearance')),
+            (network_widgets, _('Network')),
             (units_widgets, _('Units')),
             (fiat_widgets, _('Fiat')),
             (lightning_widgets, _('Lightning')),

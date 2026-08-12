@@ -31,6 +31,7 @@ class QEQRParser(QObject):
     dataChanged = pyqtSignal()
     sizeChanged = pyqtSignal()
     videoSinkChanged = pyqtSignal()
+    availableChanged = pyqtSignal()
 
     def __init__(self, text=None, parent=None):
         super().__init__(parent)
@@ -40,9 +41,18 @@ class QEQRParser(QObject):
         self._video_sink = None
 
         self._text = text
-        self.qrreader = get_qr_reader()
-        if not self.qrreader:
-            raise Exception(_("The platform QR detection library is not available."))
+        # never raise from a QML-instantiated constructor: a failed creation
+        # leaves a half-built object behind and crashes the app. A parser
+        # without a detection library is simply inert.
+        try:
+            self.qrreader = get_qr_reader()
+        except Exception as e:
+            self._logger.error(f'no QR detection library available: {e!r}')
+            self.qrreader = None
+
+    @pyqtProperty(bool, notify=availableChanged)
+    def available(self):
+        return self.qrreader is not None
 
     @pyqtProperty(QVideoSink, notify=videoSinkChanged)
     def videoSink(self):
@@ -55,6 +65,8 @@ class QEQRParser(QObject):
             self._video_sink.videoFrameChanged.connect(self.onVideoFrame)
 
     def onVideoFrame(self, videoframe):
+        if self.qrreader is None:
+            return
         if self._busy or self._data:
             return
 

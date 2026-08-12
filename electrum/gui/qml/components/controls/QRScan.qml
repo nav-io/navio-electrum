@@ -160,4 +160,14 @@ Item {
         videoSink: loader.item.vo.videoSink
     }
 
+    Label {
+        visible: !qr.available
+        anchors.centerIn: parent
+        width: parent.width * 4/5
+        text: qsTr('QR scanning is not available (QR detection library not found). You can still paste or type below.')
+        wrapMode: Text.Wrap
+        horizontalAlignment: Text.AlignHCenter
+        color: constants.mutedForeground
+    }
+
 }
