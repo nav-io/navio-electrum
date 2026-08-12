@@ -714,7 +714,7 @@ class Blsct_Wallet(Abstract_Wallet):
     # ------------------------------------------------------------------ send
 
     def get_view_key_pair(self) -> Tuple[str, str]:
-        """(private view key hex, public spend key hex) — enough to create a
+        """(private view key hex, public spend key hex) -- enough to create a
         watch-only wallet that sees this wallet's history and balances."""
         return (self.keystore.view_key_hex, self.keystore.spend_pub_hex)
 
@@ -1181,7 +1181,7 @@ def create_new_blsct_wallet(*, path, config, password=None, encrypt_file=True,
 
 
 def is_blsct_view_key_str(text: str) -> bool:
-    """'<view_key_hex(64)>:<spend_pub_hex(96)>' — the watch-only import format."""
+    """'<view_key_hex(64)>:<spend_pub_hex(96)>' -- the watch-only import format."""
     text = text.strip()
     parts = text.split(':')
     if len(parts) != 2:
