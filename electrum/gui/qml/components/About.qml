@@ -22,12 +22,16 @@ Pane {
                 Layout.columnSpan: 2
                 Layout.alignment: Qt.AlignHCenter
                 Layout.preferredWidth: parent.width
-                Layout.preferredHeight: parent.width * 3/4 // reduce height, empty space in png
+                Layout.preferredHeight: parent.width * 2/5
+                Layout.topMargin: constants.paddingXLarge
+                Layout.bottomMargin: constants.paddingXLarge
 
                 Image {
                     id: electrum_logo
-                    width: parent.width
+                    anchors.centerIn: parent
+                    width: parent.width * 1/3
                     height: width
+                    fillMode: Image.PreserveAspectFit
                     source: '../../icons/electrum_presplash.png'
                 }
             }
