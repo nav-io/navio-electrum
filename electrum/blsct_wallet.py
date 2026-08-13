@@ -126,6 +126,10 @@ class BlsctKeyStore(KeyStore):
         except Exception:
             raise util.InvalidPassword()
 
+    def get_passphrase(self, password) -> str:
+        # BLSCT seeds have no BIP39 passphrase; the GUI seed view asks for it
+        return ''
+
     # -- KeyStore abstract methods --------------------------------------------
 
     def has_seed(self):
