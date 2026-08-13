@@ -80,7 +80,7 @@ def _scan_multipart(parent, config, on_payload, on_error):
             return
         on_payload(payload)
 
-    dialog = _scan_multipart._dialog = MultipartCameraDialog(parent, config)
+    dialog = _scan_multipart._dialog = MultipartCameraDialog(parent=parent, config=config)
     dialog.qr_finished.connect(on_finished)
     dialog.start_scan(config.VIDEO_DEVICE_PATH)
 
