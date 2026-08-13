@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Optional, List, Tuple
 from PyQt6.QtCore import Qt, QTimer, QRect, pyqtSignal
 from PyQt6.QtGui import QPen, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget,
-                             QFileDialog, QSlider, QGridLayout, QDialog, QApplication)
+                             QFileDialog, QSlider, QGridLayout, QDialog, QApplication, QTextEdit,
+                             QCheckBox)
 
 from electrum.bip32 import is_bip32_derivation, BIP32Node, normalize_bip32_derivation, xpub_type
 from electrum.daemon import Daemon
@@ -101,8 +102,11 @@ class QENewWalletWizard(NewWalletWizard, QEAbstractWizard, MessageBoxMixin):
             'hw_unlock': {'gui': WCChooseHWDevice},
             'wallet_type': {'gui': WCWalletType},
             'blsct_create_seed': {'gui': WCBlsctCreateSeed},
+            'blsct_create_ext': {'gui': WCBlsctSeedExt},
             'blsct_confirm_seed': {'gui': WCBlsctConfirmSeed},
             'blsct_have_seed': {'gui': WCBlsctHaveSeed},
+            'blsct_have_ext': {'gui': WCBlsctSeedExt},
+            'blsct_have_viewkey': {'gui': WCBlsctHaveViewKey},
             'keystore_type': {'gui': WCKeystoreType},
             'create_seed': {'gui': WCCreateSeed},
             'create_ext': {'gui': WCEnterExt},
@@ -391,10 +395,45 @@ class WCWalletName(WalletWizardComponent, Logger):
 class WCWalletType(WalletWizardComponent):
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(self, parent, wizard, title=_('Create new wallet'))
+
+        from electrum import constants
+        from electrum.simple_config import SimpleConfig
+        from PyQt6.QtWidgets import QComboBox, QMessageBox
+        network_row = QHBoxLayout()
+        network_row.addWidget(QLabel(_('Network')))
+        self.network_cb = QComboBox()
+        self.network_cb.addItems(['mainnet', 'testnet'])
+        self._current_chain = constants.net.NET_NAME
+        idx = self.network_cb.findText(self._current_chain)
+        self.network_cb.setCurrentIndex(max(0, idx))
+        self._reverting_network = False
+
+        def on_network_changed(name):
+            if self._reverting_network or name == self._current_chain:
+                return
+            answer = QMessageBox.question(
+                self, _('Switch network?'),
+                '\n'.join([
+                    _('Wallets exist per network.'),
+                    _('Navio Electrum will close now; reopen it to continue on {}.').format(name),
+                ]))
+            if answer == QMessageBox.StandardButton.Yes:
+                SimpleConfig.set_persisted_default_chain(name)
+                QApplication.instance().quit()
+            else:
+                self._reverting_network = True
+                self.network_cb.setCurrentText(self._current_chain)
+                self._reverting_network = False
+
+        self.network_cb.currentTextChanged.connect(on_network_changed)
+        network_row.addWidget(self.network_cb, 1)
+        self.layout().addLayout(network_row)
+
         message = _('What kind of wallet do you want to create?')
         wallet_kinds = [
             ChoiceItem(key='blsct', label=_('Navio wallet (new seed)')),
             ChoiceItem(key='blsct_restore', label=_('Restore Navio wallet from seed')),
+            ChoiceItem(key='blsct_watch', label=_('Watch-only wallet (view key)')),
         ]
         choices = wallet_kinds
 
@@ -559,9 +598,19 @@ class WCBlsctConfirmSeed(WalletWizardComponent):
             is_seed=lambda x: ' '.join(x.split()) == self.wizard_data['seed'],
             config=self.wizard.config,
         )
-        self.seed_widget.validChanged.connect(lambda valid: setattr(self, 'valid', valid))
+        self._seed_valid = False
+
+        def on_seed_valid_changed(v):
+            self._seed_valid = v
+            self._update_valid()
+        self.seed_widget.validChanged.connect(on_seed_valid_changed)
         self.layout().addWidget(self.seed_widget)
-        wizard.app.clipboard().clear()
+        self.skip_cb = QCheckBox(_('Skip verification (I have saved my seed)'))
+        self.skip_cb.toggled.connect(self._update_valid)
+        self.layout().addWidget(self.skip_cb)
+
+    def _update_valid(self, *_args):
+        self.valid = self.skip_cb.isChecked() or self._seed_valid
 
     def apply(self):
         pass
@@ -586,11 +635,96 @@ class WCBlsctHaveSeed(WalletWizardComponent):
         self.seed_widget.validChanged.connect(lambda valid: setattr(self, 'valid', valid))
         self.layout().addWidget(self.seed_widget)
 
+        date_row = QHBoxLayout()
+        date_row.addWidget(QLabel(_('Wallet creation date (optional)')))
+        self.creation_date_e = QLineEdit()
+        self.creation_date_e.setPlaceholderText('YYYY-MM-DD')
+        self.creation_date_e.setMaximumWidth(160)
+        date_row.addWidget(self.creation_date_e)
+        date_row.addStretch(1)
+        self.layout().addLayout(date_row)
+        self.layout().addWidget(WWLabel(_(
+            'Skips scanning blocks older than this date, making the restore '
+            'much faster. Leave empty to scan the whole chain.')))
+
     def apply(self):
         self.wizard_data['seed'] = ' '.join(self.seed_widget.get_seed_words())
         self.wizard_data['seed_type'] = 'blsct'
         self.wizard_data['seed_extend'] = False
         self.wizard_data['seed_variant'] = 'bip39'
+        self.wizard_data['creation_date'] = self.creation_date_e.text().strip()
+
+
+class WCBlsctHaveViewKey(WalletWizardComponent):
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(self, parent, wizard, title=_('Enter View Key'))
+        self.layout().addWidget(WWLabel(' '.join([
+            _('Enter the view key string of the wallet to watch.'),
+            _('It looks like two hex strings separated by a colon, and is shown'
+              ' under Wallet > View Key in the wallet that owns the funds.'),
+        ])))
+        self.viewkey_e = QTextEdit()
+        self.viewkey_e.setAcceptRichText(False)
+        self.viewkey_e.textChanged.connect(self._on_text_changed)
+        self.layout().addWidget(self.viewkey_e)
+        note = WWLabel(_('A watch-only wallet sees incoming coins, balances and'
+                         ' history, but cannot spend or stake.'))
+        self.layout().addWidget(note)
+        date_row = QHBoxLayout()
+        date_row.addWidget(QLabel(_('Wallet creation date (optional)')))
+        self.creation_date_e = QLineEdit()
+        self.creation_date_e.setPlaceholderText('YYYY-MM-DD')
+        self.creation_date_e.setMaximumWidth(160)
+        date_row.addWidget(self.creation_date_e)
+        date_row.addStretch(1)
+        self.layout().addLayout(date_row)
+        self.layout().addStretch(1)
+
+    def _on_text_changed(self):
+        from electrum.blsct_wallet import is_blsct_view_key_str
+        self.valid = is_blsct_view_key_str(self.viewkey_e.toPlainText())
+
+    def apply(self):
+        self.wizard_data['seed'] = self.viewkey_e.toPlainText().strip()
+        self.wizard_data['seed_type'] = 'blsct'
+        self.wizard_data['seed_extend'] = False
+        self.wizard_data['seed_variant'] = 'bip39'
+        self.wizard_data['creation_date'] = self.creation_date_e.text().strip()
+
+
+class WCBlsctSeedExt(WalletWizardComponent):
+    """Optional BIP39 passphrase ('seed extension') for BLSCT wallets;
+    compatible with navio-core's mnemonic passphrase."""
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(self, parent, wizard, title=_('Seed Extension'))
+        self.layout().addWidget(WWLabel('\n'.join([
+            _('You may extend your seed with a custom passphrase (BIP39).'),
+            _('It must be saved together with your seed; without it the seed '
+              'restores a different, empty wallet.'),
+            _('Note that this is NOT your encryption password.'),
+            _('If you do not know what this is, leave it disabled.'),
+        ])))
+        self.cb = QCheckBox(_('Extend this seed with a passphrase'))
+        self.layout().addWidget(self.cb)
+        self.ext_e = QLineEdit()
+        self.ext_e.setEnabled(False)
+        self.layout().addWidget(self.ext_e)
+        self.layout().addStretch(1)
+
+        def on_toggle(checked):
+            self.ext_e.setEnabled(checked)
+            self._update_valid()
+        self.cb.toggled.connect(on_toggle)
+        self.ext_e.textEdited.connect(self._update_valid)
+        self._valid = True
+
+    def _update_valid(self, *_args):
+        self.valid = (not self.cb.isChecked()) or bool(self.ext_e.text())
+
+    def apply(self):
+        extend = self.cb.isChecked() and bool(self.ext_e.text())
+        self.wizard_data['seed_extend'] = extend
+        self.wizard_data['seed_extra_words'] = self.ext_e.text() if extend else ''
 
 
 class WCEnterExt(WalletWizardComponent, Logger):

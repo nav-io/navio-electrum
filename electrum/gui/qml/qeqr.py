@@ -20,6 +20,7 @@ from electrum.logging import get_logger
 from electrum.qrreader import get_qr_reader
 from electrum.i18n import _
 from electrum.util import profiler, get_asyncio_loop
+from electrum.bip21 import BITCOIN_BIP21_URI_SCHEME
 from electrum.gui.common_qt.util import draw_qr
 
 
@@ -28,8 +29,10 @@ class QEQRParser(QObject):
 
     busyChanged = pyqtSignal()
     dataChanged = pyqtSignal()
+    dataScanned = pyqtSignal([str], arguments=['data'])  # each decode (continuous mode)
     sizeChanged = pyqtSignal()
     videoSinkChanged = pyqtSignal()
+    availableChanged = pyqtSignal()
 
     def __init__(self, text=None, parent=None):
         super().__init__(parent)
@@ -37,11 +40,32 @@ class QEQRParser(QObject):
         self._busy = False
         self._data = None
         self._video_sink = None
+        self._continuous = False
 
         self._text = text
-        self.qrreader = get_qr_reader()
-        if not self.qrreader:
-            raise Exception(_("The platform QR detection library is not available."))
+        # never raise from a QML-instantiated constructor: a failed creation
+        # leaves a half-built object behind and crashes the app. A parser
+        # without a detection library is simply inert.
+        try:
+            self.qrreader = get_qr_reader()
+        except Exception as e:
+            self._logger.error(f'no QR detection library available: {e!r}')
+            self.qrreader = None
+
+    @pyqtProperty(bool, notify=availableChanged)
+    def available(self):
+        return self.qrreader is not None
+
+    continuousChanged = pyqtSignal()
+    @pyqtProperty(bool, notify=continuousChanged)
+    def continuous(self):
+        return self._continuous
+
+    @continuous.setter
+    def continuous(self, continuous):
+        if self._continuous != continuous:
+            self._continuous = continuous
+            self.continuousChanged.emit()
 
     @pyqtProperty(QVideoSink, notify=videoSinkChanged)
     def videoSink(self):
@@ -54,6 +78,8 @@ class QEQRParser(QObject):
             self._video_sink.videoFrameChanged.connect(self.onVideoFrame)
 
     def onVideoFrame(self, videoframe):
+        if self.qrreader is None:
+            return
         if self._busy or self._data:
             return
 
@@ -91,8 +117,12 @@ class QEQRParser(QObject):
 
         if len(self.qrreader_res) > 0:
             result = self.qrreader_res[0]
-            self._data = result
-            self.dataChanged.emit()
+            if self._continuous:
+                # keep scanning: the consumer collects each decode
+                self.dataScanned.emit(result)
+            else:
+                self._data = result
+                self.dataChanged.emit()
 
         self._busy = False
         self.busyChanged.emit()
@@ -144,7 +174,7 @@ class QEQRImageProvider(QQuickImageProvider):
         # (unknown schemes might be found when a colon is in a serialized TX, which
         # leads to mangling of the tx, so we check for supported schemes.)
         uri = urllib.parse.urlparse(qstr)
-        if uri.scheme and uri.scheme in ['bitcoin', 'lightning']:
+        if uri.scheme and uri.scheme in [BITCOIN_BIP21_URI_SCHEME, 'lightning']:
             # urlencode request parameters
             query = urllib.parse.parse_qs(uri.query)
             query = urllib.parse.urlencode(query, doseq=True, quote_via=urllib.parse.quote)

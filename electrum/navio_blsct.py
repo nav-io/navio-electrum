@@ -142,6 +142,15 @@ def bip39_mnemonic_to_entropy(mnemonic: str) -> bytes:
         raise ValueError('invalid mnemonic checksum')
     return entropy
 
+def bip39_mnemonic_to_seed(mnemonic: str, passphrase: str = '') -> bytes:
+    """BIP-39 seed: PBKDF2-HMAC-SHA512(sentence, 'mnemonic'+passphrase, 2048),
+    64 bytes. Whitespace-normalized like navio-core's MnemonicToSeed."""
+    sentence = ' '.join(mnemonic.split())
+    return hashlib.pbkdf2_hmac(
+        'sha512', sentence.encode('utf-8'),
+        b'mnemonic' + (passphrase or '').encode('utf-8'), 2048)
+
+
 def is_bip39_mnemonic(text: str) -> bool:
     try:
         bip39_mnemonic_to_entropy(text)
@@ -351,15 +360,23 @@ class BlsctKeyRing:
     """
 
     def __init__(self, seed_hex: Optional[str], *, view_key_hex: str = None,
-                 spend_pub_hex: str = None):
+                 spend_pub_hex: str = None, passphrase: str = None):
         b = get_blsct()
         self.b = b
         self.seed = None
         self.spend_key = None
         if seed_hex is not None:
-            # navio-core derives the BLS master key from the BIP39 entropy via
-            # EIP-2333 (derive_master_SK) before FromSeedToChildKey; match that
-            master_hex = derive_master_sk(bytes.fromhex(seed_hex)).hex()
+            # navio-core key derivation (KeyMan::SetupMnemonicFromEntropy):
+            # - no passphrase: BLS master key from the 32-byte BIP39 entropy
+            #   via EIP-2333 (derive_master_SK)
+            # - with passphrase: stretch mnemonic+passphrase into the 64-byte
+            #   BIP-39 seed first, then EIP-2333
+            if passphrase:
+                words = bip39_entropy_to_mnemonic(bytes.fromhex(seed_hex))
+                ikm = bip39_mnemonic_to_seed(words, passphrase)
+            else:
+                ikm = bytes.fromhex(seed_hex)
+            master_hex = derive_master_sk(ikm).hex()
             self.seed = b.Scalar.deserialize(master_hex)
             child = b.ChildKey(self.seed)
             self.master_blinding_key = child.to_blinding_key()
@@ -508,8 +525,10 @@ class BlsctKeyRing:
             return None
         token_id_hex = None
         if out.token_id and out.token_id != bytes(32):
-            # TokenId serialization: token (32 bytes) + subid (8 bytes le)
-            token_id_hex = out.token_id.hex() + out.token_nft_id.to_bytes(8, 'little', signed=False).hex()
+            # TokenId serialization: token (32 bytes) + subid (8 bytes le).
+            # note: fungible outputs carry nft_id == -1 (UINT64_MAX), so the
+            # subid must be encoded as a signed value
+            token_id_hex = out.token_id.hex() + out.token_nft_id.to_bytes(8, 'little', signed=True).hex()
         return self.recover_amount(out.range_proof, out.blinding_key.hex(), token_id_hex)
 
     # -- spending ------------------------------------------------------------
@@ -535,6 +554,7 @@ class SpendableOutput(NamedTuple):
     account: int
     index: int
     staked_commitment: bool = False
+    token_id_hex: Optional[str] = None  # 40-byte hex (token + subid), None = NAV
 
 
 class Recipient(NamedTuple):
@@ -548,6 +568,13 @@ class Recipient(NamedTuple):
     # attach an encrypted cold-staking delegation payload (DATA predicate);
     # only valid on a StakedCommitment output
     delegation: Optional[stake_delegation.DelegationRequest] = None
+    token_id_hex: Optional[str] = None  # 40-byte hex (token + subid), None = NAV
+
+
+def _token_id_obj(b, token_id_hex: Optional[str]):
+    if not token_id_hex:
+        return b.TokenId()
+    return b.TokenId.deserialize(token_id_hex)
 
 
 def _as_recipient(r) -> Recipient:
@@ -626,16 +653,29 @@ def build_signed_tx(keyring: BlsctKeyRing,
     """
     b = get_blsct()
     recipients = [_as_recipient(r) for r in recipients]
-    total_in = sum(u.amount for u in utxos)
-    total_out = sum(r.amount for r in recipients)
     if subtract_fee_from_amount and len(recipients) != 1:
         raise ValueError('subtract_fee_from_amount requires exactly one recipient')
     if subtract_fee_from_amount and recipients[0].output_type != 'Normal':
         raise ValueError('cannot subtract fee from a staked output')
+    if subtract_fee_from_amount and recipients[0].token_id_hex:
+        raise ValueError('the fee is paid in NAV; cannot subtract it from a token output')
+
+    # per-token accounting; key None is NAV, which also pays the fee
+    in_by_token = {}   # type: dict
+    for u in utxos:
+        in_by_token[u.token_id_hex] = in_by_token.get(u.token_id_hex, 0) + u.amount
+    out_by_token = {}  # type: dict
+    for r in recipients:
+        out_by_token[r.token_id_hex] = out_by_token.get(r.token_id_hex, 0) + r.amount
+    for token in out_by_token:
+        if token is not None and in_by_token.get(token, 0) < out_by_token[token]:
+            raise NotEnoughFunds()
+    total_in = in_by_token.get(None, 0)
+    total_out = out_by_token.get(None, 0)
 
     def build_with_fee(fee: int) -> str:
         send_total = total_out - (fee if subtract_fee_from_amount else 0)
-        if send_total <= 0:
+        if send_total < 0 or (send_total <= 0 and not any(t is not None for t in out_by_token)):
             raise NotEnoughFunds()
         change = total_in - total_out - (0 if subtract_fee_from_amount else fee)
         if change < 0:
@@ -646,7 +686,7 @@ def build_signed_tx(keyring: BlsctKeyRing,
                 psk = keyring.priv_spending_key(u.blinding_key_hex, u.account, u.index)
                 out_point = b.OutPoint(b.CTxId.deserialize(u.output_hash))
                 txin = b.TxIn(u.amount, b.Scalar.deserialize(u.gamma_hex), psk,
-                              b.TokenId(), out_point,
+                              _token_id_obj(b, u.token_id_hex), out_point,
                               staked_commitment=u.staked_commitment)
                 rv = b.build_unsigned_input(txin.value())
                 if int(rv.result) != 0:
@@ -660,16 +700,24 @@ def build_signed_tx(keyring: BlsctKeyRing,
                 outs.append(r._replace(amount=r.amount - fee))
             else:
                 outs = list(recipients)
+            change_addr = keyring.address(*change_address_pair)
             if change > 0:
-                change_addr = keyring.address(*change_address_pair)
                 outs.append(Recipient(change_addr, change))
+            # per-token change back to ourselves
+            for token, t_in in in_by_token.items():
+                if token is None:
+                    continue
+                t_change = t_in - out_by_token.get(token, 0)
+                if t_change > 0:
+                    outs.append(Recipient(change_addr, t_change, token_id_hex=token))
             for rec in outs:
                 if rec.amount <= 0:
                     raise ValueError('output amount must be positive')
                 sub_addr = keyring.address_to_subaddr(rec.address)
                 blinding_key = b.Scalar.random()
                 txout = b.TxOut(sub_addr, rec.amount, rec.memo or '',
-                                b.TokenId(), rec.output_type, rec.min_stake,
+                                _token_id_obj(b, rec.token_id_hex),
+                                rec.output_type, rec.min_stake,
                                 False, blinding_key)
                 rv = b.build_unsigned_output(txout.value())
                 if int(rv.result) != 0:
@@ -719,3 +767,161 @@ def build_signed_tx(keyring: BlsctKeyRing,
 
     parsed = parse_tx_hex(raw)
     return BuiltTx(raw, parsed.txid, fee)
+
+# ---------------------------------------------------------------------------
+# Token creation / minting
+# ---------------------------------------------------------------------------
+# A wallet has a single token key (derived from the seed alongside the view
+# and spending keys), so it can create and mint one token (or NFT
+# collection), matching navio-core semantics.
+
+def _metadata_map(b_low, metadata: Dict[str, str]):
+    m = b_low.create_string_map()
+    for k, v in (metadata or {}).items():
+        b_low.add_to_string_map(m, str(k), str(v))
+    return m
+
+
+def _build_signed_special_tx(keyring: BlsctKeyRing,
+                             utxos: Sequence[SpendableOutput],
+                             make_special_outputs,
+                             fixed_fee: Optional[int] = None) -> BuiltTx:
+    """Build+sign a tx whose outputs are produced by `make_special_outputs`
+    (a callable returning a list of unsigned-output ret-vals, e.g. a
+    create-token or mint output). All inputs must be NAV; they pay the fee
+    and the remainder returns as change."""
+    b = get_blsct()
+    import blsct.blsct as low
+    total_in = sum(u.amount for u in utxos)
+
+    def build_with_fee(fee: int) -> str:
+        change = total_in - fee
+        if change < 0:
+            raise NotEnoughFunds()
+        utx = b.create_unsigned_transaction()
+        try:
+            for u in utxos:
+                psk = keyring.priv_spending_key(u.blinding_key_hex, u.account, u.index)
+                out_point = b.OutPoint(b.CTxId.deserialize(u.output_hash))
+                txin = b.TxIn(u.amount, b.Scalar.deserialize(u.gamma_hex), psk,
+                              _token_id_obj(b, u.token_id_hex), out_point,
+                              staked_commitment=u.staked_commitment)
+                rv = b.build_unsigned_input(txin.value())
+                if int(rv.result) != 0:
+                    b.free_obj(rv)
+                    raise ValueError(f'build_unsigned_input failed: {rv.result}')
+                b.add_unsigned_transaction_input(utx, rv.value)
+                b.free_obj(rv)
+            for rv in make_special_outputs():
+                if int(rv.result) != 0:
+                    b.free_obj(rv)
+                    raise ValueError(f'special output build failed: {rv.result}')
+                b.add_unsigned_transaction_output(utx, rv.value)
+                b.free_obj(rv)
+            if change > 0:
+                change_addr = keyring.address(CHANGE_ACCOUNT, 0)
+                sub_addr = keyring.address_to_subaddr(change_addr)
+                blinding_key = b.Scalar.random()
+                txout = b.TxOut(sub_addr, change, '', b.TokenId(),
+                                'Normal', 0, False, blinding_key)
+                rv = b.build_unsigned_output(txout.value())
+                if int(rv.result) != 0:
+                    b.free_obj(rv)
+                    raise ValueError(f'build_unsigned_output failed: {rv.result}')
+                b.add_unsigned_transaction_output(utx, rv.value)
+                b.free_obj(rv)
+            b.set_unsigned_transaction_fee(utx, fee)
+            rv = b.sign_unsigned_transaction(utx)
+            if int(rv.result) != 0:
+                b.free_obj(rv)
+                raise ValueError(f'sign_unsigned_transaction failed: {rv.result}')
+            buf_hex = b.buf_to_malloced_hex_c_str(
+                b.cast_to_uint8_t_ptr(rv.value), rv.value_size - 1)
+            raw_hex = bytes.fromhex(buf_hex).decode('ascii')
+            b.free_obj(rv)
+            return raw_hex
+        finally:
+            b.delete_unsigned_transaction(utx)
+
+    if fixed_fee is not None:
+        raw = build_with_fee(fixed_fee)
+        fee = fixed_fee
+    else:
+        fee = DEFAULT_FEE_PER_COMPONENT * (len(utxos) + 3)
+        raw = build_with_fee(fee)
+        for _ in range(6):
+            required = _required_fee(len(raw) // 2)
+            if fee >= required:
+                break
+            fee = required
+            raw = build_with_fee(fee)
+        else:
+            raise ValueError('could not converge on a valid fee')
+
+    parsed = parse_tx_hex(raw)
+    return BuiltTx(raw, parsed.txid, fee)
+
+
+def build_create_token_tx(keyring: BlsctKeyRing,
+                          utxos: Sequence[SpendableOutput],
+                          metadata: Dict[str, str],
+                          total_supply: int,
+                          is_nft: bool = False,
+                          fixed_fee: Optional[int] = None) -> BuiltTx:
+    """Create this wallet's token (fungible) or NFT collection on-chain."""
+    b = get_blsct()
+    import blsct.blsct as low
+
+    def make_outputs():
+        pub = b.PublicKey.from_scalar(keyring.token_key)
+        meta = _metadata_map(low, metadata)
+        info_rv = low.build_token_info(
+            low.BlsctNft if is_nft else low.BlsctToken,
+            pub.value(), meta, int(total_supply))
+        info = info_rv.value if hasattr(info_rv, 'value') else info_rv
+        return [low.build_unsigned_create_token_output(keyring.token_key.value(), info)]
+
+    return _build_signed_special_tx(keyring, utxos, make_outputs, fixed_fee=fixed_fee)
+
+
+def build_mint_token_tx(keyring: BlsctKeyRing,
+                        utxos: Sequence[SpendableOutput],
+                        dest_address: str,
+                        amount: int,
+                        fixed_fee: Optional[int] = None) -> BuiltTx:
+    """Mint `amount` units of this wallet's fungible token to dest_address."""
+    b = get_blsct()
+    import blsct.blsct as low
+
+    def make_outputs():
+        sub_addr = keyring.address_to_subaddr(dest_address)
+        blinding_key = b.Scalar.random()
+        pub = b.PublicKey.from_scalar(keyring.token_key)
+        return [low.build_unsigned_mint_token_output(
+            sub_addr.value(), int(amount), blinding_key.value(),
+            keyring.token_key.value(), pub.value())]
+
+    return _build_signed_special_tx(keyring, utxos, make_outputs, fixed_fee=fixed_fee)
+
+
+def build_mint_nft_tx(keyring: BlsctKeyRing,
+                      utxos: Sequence[SpendableOutput],
+                      dest_address: str,
+                      nft_id: int,
+                      metadata: Dict[str, str],
+                      fixed_fee: Optional[int] = None) -> BuiltTx:
+    """Mint NFT number `nft_id` of this wallet's collection to dest_address."""
+    b = get_blsct()
+    import blsct.blsct as low
+
+    def make_outputs():
+        sub_addr = keyring.address_to_subaddr(dest_address)
+        blinding_key = b.Scalar.random()
+        pub = b.PublicKey.from_scalar(keyring.token_key)
+        meta = _metadata_map(low, metadata)
+        return [low.build_unsigned_mint_nft_output(
+            sub_addr.value(), blinding_key.value(),
+            keyring.token_key.value(), pub.value(),
+            int(nft_id), meta)]
+
+    return _build_signed_special_tx(keyring, utxos, make_outputs, fixed_fee=fixed_fee)

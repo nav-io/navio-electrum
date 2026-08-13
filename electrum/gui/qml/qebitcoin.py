@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 from PyQt6.QtCore import pyqtProperty, pyqtSignal, pyqtSlot, QObject
 
@@ -54,7 +55,11 @@ class QEBitcoin(QObject):
         self._logger.debug('generating seed of type ' + str(seed_type))
 
         async def co_gen_seed(seed_type, language):
-            self._generated_seed = mnemonic.Mnemonic(language).make_seed(seed_type=seed_type)
+            if seed_type == 'blsct':
+                from electrum.navio_blsct import bip39_entropy_to_mnemonic
+                self._generated_seed = bip39_entropy_to_mnemonic(os.urandom(32))
+            else:
+                self._generated_seed = mnemonic.Mnemonic(language).make_seed(seed_type=seed_type)
             self._logger.debug('seed generated')
             self.generatedSeedChanged.emit()
 
@@ -109,6 +114,19 @@ class QEBitcoin(QObject):
     @pyqtSlot(str, result=bool)
     def isAddress(self, addr: str):
         return is_address(addr)
+
+    @pyqtSlot(str, result=bool)
+    def isBlsctViewKey(self, text: str):
+        from electrum.blsct_wallet import is_blsct_view_key_str
+        return is_blsct_view_key_str(text)
+
+    @pyqtSlot(str, result=bool)
+    def isBlsctSeed(self, text: str):
+        from electrum.navio_blsct import is_bip39_mnemonic
+        text = text.strip()
+        if len(text) == 64 and all(c in '0123456789abcdefABCDEF' for c in text):
+            return True
+        return is_bip39_mnemonic(' '.join(text.split()))
 
     @pyqtSlot(str, result=bool)
     def isAddressList(self, csv: str):

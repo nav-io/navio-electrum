@@ -245,6 +245,60 @@ class SimpleConfig(Logger):
             if android_pkg_name == f"org.electrum.{chain.cli_flag()}.electrum":
                 config_options[chain.cli_flag()] = True
 
+    # -- persisted default chain (selectable in the new-wallet wizard) --------
+    # A marker file in the base datadir; read at startup when no chain flag
+    # was given on the command line. Absent file = mainnet.
+
+    _DEFAULT_CHAIN_FILENAME = 'default_chain'
+
+    @classmethod
+    def _default_chain_marker_path(cls, config_options: dict[str, Any] = None) -> Optional[str]:
+        base = (config_options or {}).get('electrum_path') or util.user_dir()
+        if not base:
+            return None
+        return os.path.join(base, cls._DEFAULT_CHAIN_FILENAME)
+
+    @classmethod
+    def get_persisted_default_chain(cls, config_options: dict[str, Any] = None) -> Optional[str]:
+        path = cls._default_chain_marker_path(config_options)
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            with open(path, encoding='utf-8') as f:
+                flag = f.read().strip()
+        except OSError:
+            return None
+        valid_flags = [chain.cli_flag() for chain in constants.NETS_LIST]
+        return flag if flag in valid_flags else None
+
+    @classmethod
+    def set_persisted_default_chain(cls, chain_flag: Optional[str],
+                                    config_options: dict[str, Any] = None) -> None:
+        """Persist the chain to start on next launch. None or 'mainnet'
+        removes the marker (mainnet is the default)."""
+        path = cls._default_chain_marker_path(config_options)
+        if not path:
+            return
+        if not chain_flag or chain_flag == constants.BitcoinMainnet.cli_flag():
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        assert chain_flag in [chain.cli_flag() for chain in constants.NETS_LIST], chain_flag
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(chain_flag + '\n')
+
+    @classmethod
+    def set_chain_config_opt_from_persisted_default(cls, config_options: dict[str, Any]) -> None:
+        """Apply the persisted default chain unless a chain was selected
+        explicitly (command line flag or android package name)."""
+        for chain in constants.NETS_LIST:
+            if config_options.get(chain.cli_flag()):
+                return
+        flag = cls.get_persisted_default_chain(config_options)
+        if flag and flag != constants.BitcoinMainnet.cli_flag():
+            config_options[flag] = True
+
     def get_selected_chain(self) -> Type[constants.AbstractNet]:
         selected_chains = [
             chain for chain in constants.NETS_LIST
@@ -898,7 +952,7 @@ Warning: setting this to too low will result in lots of payment failures."""),
     HWD_SESSION_TIMEOUT = ConfigVar('session_timeout', default=300, type_=int)
     CLI_TIMEOUT = ConfigVar('timeout', default=60.0, type_=float, convert_setter=lambda v: float(v))
     AUTOMATIC_CENTRALIZED_UPDATE_CHECKS = ConfigVar(
-        'check_updates', default=False, type_=bool,
+        'check_updates', default=True, type_=bool,
         short_desc=lambda: _("Automatically check for software updates"),
     )
     WRITE_LOGS_TO_DISK = ConfigVar(

@@ -26,7 +26,6 @@ from electrum.gui.common_qt.util import QtEventListener, qt_event_listener
 
 from .auth import AuthMixin, auth_protect
 from .qeaddresslistmodel import QEAddressCoinListModel
-from .qechannellistmodel import QEChannelListModel
 from .qeinvoicelistmodel import QEInvoiceListModel, QERequestListModel
 from .qetransactionlistmodel import QETransactionListModel
 from .qetypes import QEAmount
@@ -97,12 +96,12 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         self._addressCoinModel = None
         self._requestModel = None
         self._invoiceModel = None
-        self._channelModel = None
 
         self._lightningbalance = QEAmount()
         self._confirmedbalance = QEAmount()
         self._unconfirmedbalance = QEAmount()
         self._frozenbalance = QEAmount()
+        self._stakedbalance = QEAmount()
         self._totalbalance = QEAmount()
         self._lightningcanreceive = QEAmount()
         self._minchannelfunding = QEAmount(amount_sat=int(MIN_FUNDING_SAT))
@@ -207,6 +206,18 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
             self.balanceChanged.emit()
 
     @qt_event_listener
+    def on_event_blsct_payment_received(self, wallet, address, amount):
+        if wallet == self.wallet:
+            self._logger.info(f'blsct payment received: {amount} sat')
+            try:
+                formatted = self.wallet.config.format_amount_and_units(amount)
+            except Exception:
+                formatted = str(amount)
+            self.userNotify.emit(self.wallet, _('Payment received') + ': ' + formatted)
+            self.historyModel.setDirty()
+            self.balanceChanged.emit()
+
+    @qt_event_listener
     def on_event_adb_tx_height_changed(self, adb, txid, old_height, new_height):
         if adb == self.wallet.adb:
             self._logger.info(f'tx_height_changed {txid}. {old_height} -> {new_height}')
@@ -293,6 +304,16 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
 
     def update_sync_progress(self):
         if self.wallet.network and self.wallet.network.is_connected():
+            if self.wallet.wallet_type == 'blsct':
+                cur = max(0, self.wallet.blsct_sync.get('last_height', 0))
+                tip = self.wallet.network.get_local_height()
+                if tip > 0:
+                    pct = min(100, 100 * cur // tip)
+                    self.synchronizingProgress = \
+                        ("{} {}% ({}/{})".format(_("Scanning blocks..."), pct, cur, tip))
+                else:
+                    self.synchronizingProgress = _("Synchronizing...")
+                return
             num_sent, num_answered = self.wallet.adb.get_history_sync_state_details()
             self.synchronizingProgress = \
                 ("{} ({}/{})".format(_("Synchronizing..."), num_answered, num_sent))
@@ -324,13 +345,6 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         if self._invoiceModel is None:
             self._invoiceModel = QEInvoiceListModel(self.wallet)
         return self._invoiceModel
-
-    channelModelChanged = pyqtSignal()
-    @pyqtProperty(QEChannelListModel, notify=channelModelChanged)
-    def channelModel(self):
-        if self._channelModel is None:
-            self._channelModel = QEChannelListModel(self.wallet)
-        return self._channelModel
 
     nameChanged = pyqtSignal()
     @pyqtProperty(str, notify=nameChanged)
@@ -451,6 +465,8 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
 
     @pyqtProperty(bool, notify=dataChanged)
     def canSignMessage(self):
+        if self.wallet.wallet_type == 'blsct':
+            return False  # BLSCT keystore does not implement message signing
         return not isinstance(self.wallet, Multisig_Wallet) and not self.wallet.is_watching_only()
 
     canGetZeroconfChannelChanged = pyqtSignal()
@@ -474,6 +490,18 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         c, u, x = self.wallet.get_balance()
         self._confirmedbalance.satsInt = c+x
         return self._confirmedbalance
+
+    @pyqtProperty(str, notify=dataChanged)
+    def viewKeyStr(self):
+        if self.wallet.wallet_type != 'blsct':
+            return ''
+        return self.wallet.get_view_key_str()
+
+    @pyqtProperty(QEAmount, notify=balanceChanged)
+    def stakedBalance(self):
+        if self.wallet.wallet_type == 'blsct':
+            self._stakedbalance.satsInt = self.wallet.get_staked_balance_sat()
+        return self._stakedbalance
 
     @pyqtProperty(QEAmount, notify=balanceChanged)
     def lightningBalance(self):

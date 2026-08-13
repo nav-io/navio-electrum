@@ -145,7 +145,8 @@ class QETransactionListModel(QAbstractListModel, QtEventListener):
             if tx:
                 item['complete'] = tx.is_complete()
             else:  # due to races, tx might have already been removed from history
-                item['complete'] = False
+                # (blsct wallets don't store raw txs and preset 'complete')
+                item['complete'] = item.get('complete', False)
 
         # newly arriving txs, or (partially/fully signed) local txs have no (block) timestamp
         # FIXME just use wallet.get_tx_status, and change that as needed

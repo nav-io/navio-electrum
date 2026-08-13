@@ -46,11 +46,29 @@ elif sys.platform in ('windows', 'win32'):
 else:
     LIBNAME = 'libzbar.so.0'
 
+_LIB_CANDIDATES = [
+    os.path.join(os.path.dirname(__file__), '..', LIBNAME),  # bundled with the app
+    LIBNAME,  # system search path
+]
+if sys.platform == 'darwin':
+    # dlopen does not search the homebrew prefix (notably /opt/homebrew on
+    # apple silicon), which is where dev setups typically have zbar
+    _LIB_CANDIDATES += [
+        os.path.join('/opt/homebrew/lib', LIBNAME),
+        os.path.join('/usr/local/lib', LIBNAME),
+    ]
+
 try:
-    try:
-        LIBZBAR = ctypes.cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), '..', LIBNAME))
-    except OSError as e:
-        LIBZBAR = ctypes.cdll.LoadLibrary(LIBNAME)
+    LIBZBAR = None
+    _lib_err = None
+    for _cand in _LIB_CANDIDATES:
+        try:
+            LIBZBAR = ctypes.cdll.LoadLibrary(_cand)
+            break
+        except OSError as e:
+            _lib_err = e
+    if LIBZBAR is None:
+        raise _lib_err
 
     LIBZBAR.zbar_image_create.restype = ctypes.c_void_p
     LIBZBAR.zbar_image_scanner_create.restype = ctypes.c_void_p

@@ -411,6 +411,7 @@ def main():
             SimpleConfig.DISABLE_MEMORY_HARDENING_LINUX.key(): True,
         }
         SimpleConfig.set_chain_config_opt_based_on_android_packagename(config_options)
+        SimpleConfig.set_chain_config_opt_from_persisted_default(config_options)
     else:
         # save sys args for next parser
         saved_sys_argv = sys.argv[:]
@@ -426,6 +427,9 @@ def main():
         # re-parse command line
         sys.argv = saved_sys_argv[:]
         config_options = parse_command_line()
+        # honor the network selected in the wallet-creation wizard, unless a
+        # chain flag was given explicitly
+        SimpleConfig.set_chain_config_opt_from_persisted_default(config_options)
 
     config = read_config(config_options)
     cmdname = config.get('cmd')

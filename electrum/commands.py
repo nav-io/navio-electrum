@@ -298,12 +298,13 @@ class Commands(Logger):
         return await self.daemon._stop_wallet(wallet_path)
 
     @command('')
-    async def create(self, password=None, encrypt_file=True, wallet_path=None, creation_height=None):
+    async def create(self, password=None, encrypt_file=True, wallet_path=None, creation_height=None, seed_passphrase=None):
         """Create a new Navio BLSCT wallet.
         If you want to be prompted for an argument, type '?' or ':' (concealed)
 
         arg:bool:encrypt_file:Whether the file on disk should be encrypted with the provided password
         arg:int:creation_height:Block height to start scanning from (default: 0)
+        arg:str:seed_passphrase:Optional BIP39 passphrase extending the seed (navio-core compatible)
         """
         from .blsct_wallet import create_new_blsct_wallet
         d = create_new_blsct_wallet(
@@ -311,6 +312,7 @@ class Commands(Logger):
             password=password,
             encrypt_file=encrypt_file,
             creation_height=creation_height,
+            passphrase=seed_passphrase or '',
             config=self.config)
         return {
             'seed': d['seed'],
@@ -319,14 +321,16 @@ class Commands(Logger):
         }
 
     @command('')
-    async def restore(self, text, password=None, encrypt_file=True, wallet_path=None, creation_height=0):
-        """Restore a Navio BLSCT wallet from a 24-word seed phrase or a
-        64-char hex seed.
+    async def restore(self, text, password=None, encrypt_file=True, wallet_path=None, creation_height=0, seed_passphrase=None):
+        """Restore a Navio BLSCT wallet from a 24-word seed phrase, a
+        64-char hex seed, or a view key string ('viewkey:spendpub', as shown
+        by getviewkey) for a watch-only wallet.
         If you want to be prompted for an argument, type '?' or ':' (concealed)
 
-        arg:str:text:24-word seed phrase or hex seed
+        arg:str:text:24-word seed phrase, hex seed, or view key string
         arg:bool:encrypt_file:Whether the file on disk should be encrypted with the provided password
         arg:int:creation_height:Block height to start scanning from (0 = full rescan)
+        arg:str:seed_passphrase:Optional BIP39 passphrase the seed was extended with (navio-core compatible)
         """
         from .blsct_wallet import restore_blsct_wallet_from_text
         d = restore_blsct_wallet_from_text(
@@ -335,6 +339,7 @@ class Commands(Logger):
             password=password,
             encrypt_file=encrypt_file,
             creation_height=creation_height,
+            passphrase=seed_passphrase or '',
             config=self.config)
         return {
             'path': d['wallet'].storage.get_path(),
@@ -596,6 +601,93 @@ class Commands(Logger):
         """Get seed phrase. Print the generation seed of your wallet."""
         s = wallet.get_seed(password)
         return s
+
+    @command('w')
+    async def getviewkey(self, wallet: Abstract_Wallet = None):
+        """Get the wallet's view key string ('viewkey:spendpub'). Anyone with
+        this string can see the wallet's balances and history (but cannot
+        spend); use it with `restore` to create a watch-only wallet."""
+        if not hasattr(wallet, 'get_view_key_str'):
+            raise UserFacingException('view keys only exist for BLSCT wallets')
+        return wallet.get_view_key_str()
+
+    @command('w')
+    async def listtokens(self, wallet: Abstract_Wallet = None):
+        """List token balances and NFTs held by the wallet."""
+        return {
+            'tokens': [
+                {'token_id': tid,
+                 'name': wallet.get_token_display_name(tid),
+                 'balance': balance}
+                for tid, balance in wallet.get_token_balances().items()
+            ],
+            'nfts': wallet.get_nfts(),
+        }
+
+    @command('wnp')
+    async def sendtoken(self, token_id, destination, amount, memo=None,
+                        password=None, wallet: Abstract_Wallet = None):
+        """Send tokens (or an NFT: pass its token_id and amount 1).
+        Broadcasts immediately.
+
+        arg:str:token_id:Token id (hex, as shown by listtokens)
+        arg:str:destination:Navio (nav1...) address
+        arg:int:amount:Token units to send
+        """
+        built = wallet.create_token_transaction(
+            token_id, [(destination, int(amount), memo or '')], password=password)
+        txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
+        return {'txid': txid, 'fee': built.fee}
+
+    @command('wnp')
+    async def createtoken(self, name, total_supply, is_nft=False, metadata=None,
+                          password=None, wallet: Abstract_Wallet = None):
+        """Create this wallet's token (or NFT collection with is_nft=1).
+        Each wallet controls exactly one token, derived from its seed.
+
+        arg:str:name:Token name (stored in the on-chain metadata)
+        arg:int:total_supply:Maximum supply
+        arg:bool:is_nft:Create an NFT collection instead of a fungible token
+        arg:str:metadata:Optional extra metadata as JSON object
+        """
+        meta = {'name': name}
+        if metadata:
+            meta.update(json.loads(metadata))
+        built = wallet.create_token(meta, int(total_supply), bool(is_nft),
+                                    password=password)
+        txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
+        return {'txid': txid, 'fee': built.fee}
+
+    @command('wnp')
+    async def minttoken(self, destination, amount, password=None,
+                        wallet: Abstract_Wallet = None):
+        """Mint units of this wallet's fungible token to an address.
+
+        arg:str:destination:Navio (nav1...) address
+        arg:int:amount:Token units to mint
+        """
+        built = wallet.mint_token(destination, int(amount), password=password)
+        txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
+        return {'txid': txid, 'fee': built.fee}
+
+    @command('wnp')
+    async def mintnft(self, destination, nft_id, name=None, metadata=None,
+                      password=None, wallet: Abstract_Wallet = None):
+        """Mint one NFT of this wallet's collection to an address.
+
+        arg:str:destination:Navio (nav1...) address
+        arg:int:nft_id:NFT number within the collection
+        arg:str:name:Optional NFT name (stored in the on-chain metadata)
+        arg:str:metadata:Optional extra metadata as JSON object
+        """
+        meta = {}
+        if name:
+            meta['name'] = name
+        if metadata:
+            meta.update(json.loads(metadata))
+        built = wallet.mint_nft(destination, int(nft_id), meta, password=password)
+        txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
+        return {'txid': txid, 'fee': built.fee}
 
     @command('wp')
     async def payto(self, destination, amount, fee=None, memo=None, from_coins=None,

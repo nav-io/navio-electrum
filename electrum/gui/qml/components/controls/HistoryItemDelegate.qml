@@ -43,11 +43,13 @@ Item {
             background: null
 
             onClicked: {
-                if (model.lightning) {
-                    var page = app.stack.push(Qt.resolvedUrl('../LightningPaymentDetails.qml'), {'key': model.key})
-                    page.detailsChanged.connect(function() {
-                        // update listmodel when details change
-                        visualModel.model.updateTxLabel(model.key, page.label)
+                if (Daemon.currentWallet.walletType == 'blsct') {
+                    app.stack.push(Qt.resolvedUrl('../BlsctTxDetails.qml'), {
+                        'txid': model.key,
+                        'label': model.label,
+                        'date': model.date,
+                        'confirmations': model.confirmations,
+                        'value': model.value
                     })
                 } else {
                     var page = app.stack.push(Qt.resolvedUrl('../TxDetails.qml'), {'txid': model.key})
@@ -84,11 +86,9 @@ Item {
                     Layout.rowSpan: 2
                     sourceSize.width: constants.iconSizeLarge
                     sourceSize.height: constants.iconSizeLarge
-                    source: model.lightning
-                        ? '../../../icons/lightning.png'
-                        : model.complete && model.section != 'local'
-                            ? tx_icons[Math.min(6,model.confirmations)]
-                            : '../../../icons/offline_tx.png'
+                    source: model.complete && model.section != 'local'
+                        ? tx_icons[Math.min(6,model.confirmations)]
+                        : '../../../icons/offline_tx.png'
                 }
 
                 Label {

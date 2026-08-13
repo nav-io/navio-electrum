@@ -3,15 +3,12 @@
 # file LICENCE or http://www.opensource.org/licenses/mit-license.php
 
 import asyncio
-import base64
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QProgressBar, QHBoxLayout, QPushButton, QDialog
 
 from electrum import version
-from electrum import constants
-from electrum.bitcoin import verify_usermessage_with_address
 from electrum.i18n import _
 from electrum.util import make_aiohttp_session
 from electrum.logging import Logger
@@ -20,13 +17,11 @@ from electrum._vendor.distutils.version import StrictVersion
 
 
 class UpdateCheck(QDialog, Logger):
-    url = "https://electrum.org/version"
-    download_url = "https://electrum.org/#download"
-
-    VERSION_ANNOUNCEMENT_SIGNING_KEYS = (
-        "13xjmVAB1EATPP8RshTE8S8sNwwSUM9p1P",  # ThomasV (since 3.3.4)
-        "1Nxgk6NTooV4qZsX5fdqQwrLjYcsQZAfTg",  # ghost43 (since 4.1.2)
-    )
+    # authenticity comes from TLS to github.com and the release being cut
+    # from the nav-io/navio-electrum repo (upstream's PGP-signed
+    # electrum.org/version announcement does not apply to this fork)
+    url = "https://api.github.com/repos/nav-io/navio-electrum/releases/latest"
+    download_url = "https://github.com/nav-io/navio-electrum/releases/latest"
 
     def __init__(self, *, latest_version=None):
         QDialog.__init__(self)
@@ -109,30 +104,12 @@ class UpdateCheckThread(QThread, Logger):
         #       and it's bad not to get an update notification just because we did not wait enough.
         async with make_aiohttp_session(proxy=self.network.proxy, timeout=120) as session:
             async with session.get(UpdateCheck.url) as result:
-                signed_version_dict = await result.json(content_type=None)
-                # example signed_version_dict:
-                # {
-                #     "version": "3.9.9",
-                #     "signatures": {
-                #         "1Lqm1HphuhxKZQEawzPse8gJtgjm9kUKT4": "IA+2QG3xPRn4HAIFdpu9eeaCYC7S5wS/sDxn54LJx6BdUTBpse3ibtfq8C43M7M1VfpGkD5tsdwl5C6IfpZD/gQ="
-                #     }
-                # }
-                version_num = signed_version_dict['version']
-                sigs = signed_version_dict['signatures']
-                for address, sig in sigs.items():
-                    if address not in UpdateCheck.VERSION_ANNOUNCEMENT_SIGNING_KEYS:
-                        continue
-                    sig = base64.b64decode(sig, validate=True)
-                    msg = version_num.encode('utf-8')
-                    if verify_usermessage_with_address(
-                        address=address, sig65=sig, message=msg,
-                        net=constants.BitcoinMainnet
-                    ):
-                        self.logger.info(f"valid sig for version announcement '{version_num}' from address '{address}'")
-                        break
-                else:
-                    raise Exception('no valid signature for version announcement')
-                return StrictVersion(version_num.strip())
+                release = await result.json(content_type=None)
+                # example: {"tag_name": "v4.8.5", ...}
+                tag = release['tag_name']
+                version_num = tag.lstrip('vV').strip()
+                self.logger.info(f"latest github release: {version_num}")
+                return StrictVersion(version_num)
 
     def run(self):
         if not self.network:

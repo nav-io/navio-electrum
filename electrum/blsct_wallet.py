@@ -16,6 +16,7 @@ from typing import Optional, Dict, Tuple, List, Sequence, TYPE_CHECKING
 from aiorpcx import run_in_thread, ignore_after
 
 from . import util
+from .i18n import _
 from .util import (NetworkJobOnDefaultServer, NotEnoughFunds,
                    UserFacingException, OldTaskGroup)
 from .crypto import pw_encode, pw_decode
@@ -55,6 +56,7 @@ class BlsctKeyStore(KeyStore):
         KeyStore.__init__(self)
         self.seed = d.get('seed')                    # hex str; possibly encrypted
         self.mnemonic = d.get('mnemonic')            # str; possibly encrypted
+        self.passphrase = d.get('passphrase') or ''  # BIP39 passphrase; possibly encrypted
         self.view_key_hex = d.get('view_key')        # cleartext (needed to scan)
         self.spend_pub_hex = d.get('spend_pub')      # cleartext (needed to scan)
         self.pw_hash_version = d.get('pw_hash_version', 1)
@@ -65,6 +67,7 @@ class BlsctKeyStore(KeyStore):
             'type': self.type,
             'seed': self.seed,
             'mnemonic': self.mnemonic,
+            'passphrase': self.passphrase,
             'view_key': self.view_key_hex,
             'spend_pub': self.spend_pub_hex,
             'pw_hash_version': self.pw_hash_version,
@@ -74,7 +77,7 @@ class BlsctKeyStore(KeyStore):
     # -- password handling ---------------------------------------------------
 
     def may_have_password(self):
-        return True
+        return not self.is_watching_only()
 
     def has_password(self):
         return self._encrypted
@@ -87,18 +90,24 @@ class BlsctKeyStore(KeyStore):
         self.get_seed_hex(password)
 
     def update_password(self, old_password, new_password):
+        if self.is_watching_only():
+            return  # nothing secret to encrypt; view key must stay cleartext to scan
         self.check_password(old_password)
         if new_password == '':
             new_password = None
         seed = self.get_seed_hex(old_password)
         mnemonic = self.get_mnemonic(old_password)
+        passphrase = self.get_passphrase(old_password)
         if new_password:
             self.seed = pw_encode(seed, new_password, version=self.pw_hash_version)
             self.mnemonic = pw_encode(mnemonic, new_password, version=self.pw_hash_version)
+            self.passphrase = (pw_encode(passphrase, new_password, version=self.pw_hash_version)
+                               if passphrase else '')
             self._encrypted = True
         else:
             self.seed = seed
             self.mnemonic = mnemonic
+            self.passphrase = passphrase
             self._encrypted = False
 
     def get_seed_hex(self, password) -> str:
@@ -123,6 +132,16 @@ class BlsctKeyStore(KeyStore):
         except Exception:
             raise util.InvalidPassword()
 
+    def get_passphrase(self, password) -> str:
+        if not self.passphrase:
+            return ''
+        if not self._encrypted:
+            return self.passphrase
+        try:
+            return pw_decode(self.passphrase, password, version=self.pw_hash_version)
+        except Exception:
+            raise util.InvalidPassword()
+
     # -- KeyStore abstract methods --------------------------------------------
 
     def has_seed(self):
@@ -132,7 +151,8 @@ class BlsctKeyStore(KeyStore):
         return True
 
     def is_watching_only(self):
-        return False
+        # view-key-only keystore: can scan and see balances, cannot spend
+        return not bool(self.seed)
 
     def sign_message(self, sequence, message, password, *, script_type=None) -> bytes:
         raise UserFacingException('message signing is not implemented for BLSCT wallets')
@@ -151,23 +171,46 @@ class BlsctKeyStore(KeyStore):
     def get_pubkey_provider(self, sequence):
         return None
 
+    # deterministic-keystore introspection used by wallet info GUIs;
+    # BLSCT keys are not bip32, so there is nothing meaningful to show
+    def get_derivation_prefix(self):
+        return None
+
+    def get_master_public_key(self):
+        return None
+
+    def get_root_fingerprint(self):
+        return None
+
     @classmethod
-    def from_seed_hex(cls, seed_hex: str) -> 'BlsctKeyStore':
-        ring = BlsctKeyRing(seed_hex)
+    def from_seed_hex(cls, seed_hex: str, passphrase: str = '') -> 'BlsctKeyStore':
+        ring = BlsctKeyRing(seed_hex, passphrase=passphrase or None)
         mnemonic = bip39_entropy_to_mnemonic(bytes.fromhex(seed_hex))
         return cls({
             'seed': seed_hex,
             'mnemonic': mnemonic,
+            'passphrase': passphrase or '',
             'view_key': ring.view_key.serialize(),
             'spend_pub': ring.spend_pub.serialize(),
         })
 
     @classmethod
-    def from_mnemonic(cls, mnemonic: str) -> 'BlsctKeyStore':
+    def from_mnemonic(cls, mnemonic: str, passphrase: str = '') -> 'BlsctKeyStore':
         entropy = bip39_mnemonic_to_entropy(mnemonic)
-        ks = cls.from_seed_hex(entropy.hex())
+        ks = cls.from_seed_hex(entropy.hex(), passphrase=passphrase)
         ks.mnemonic = ' '.join(mnemonic.split())
         return ks
+
+    @classmethod
+    def from_view_key(cls, view_key_hex: str, spend_pub_hex: str) -> 'BlsctKeyStore':
+        """Watch-only keystore: private view key + public spend key.
+        Can scan the chain and recover amounts, but cannot spend."""
+        # validate by constructing a scanning ring
+        BlsctKeyRing.from_view_key(view_key_hex, spend_pub_hex)
+        return cls({
+            'view_key': view_key_hex,
+            'spend_pub': spend_pub_hex,
+        })
 
 
 class BlsctUtxo:
@@ -232,8 +275,9 @@ class Blsct_Wallet(Abstract_Wallet):
         if not d or d.get('type') != 'blsct':
             raise Exception('missing/invalid blsct keystore')
         self.keystore = BlsctKeyStore(d)
-        if not self.keystore._encrypted:
-            self.keyring = BlsctKeyRing(self.keystore.seed)
+        if not self.keystore._encrypted and self.keystore.seed:
+            self.keyring = BlsctKeyRing(self.keystore.seed,
+                                        passphrase=self.keystore.passphrase or None)
         elif self.keystore.view_key_hex and self.keystore.spend_pub_hex:
             # encrypted keystore: scan with the cleartext view key; the full
             # (spending) ring is derived from the seed at signing time
@@ -279,7 +323,7 @@ class Blsct_Wallet(Abstract_Wallet):
         return 0
 
     def is_watching_only(self):
-        return False
+        return self.keystore.is_watching_only()
 
     def has_seed(self):
         return self.keystore.has_seed()
@@ -444,6 +488,202 @@ class Blsct_Wallet(Abstract_Wallet):
         """Unspent staked commitments (confirmed and unconfirmed)."""
         return [u for u in self.get_utxos() if u.d.get('staked')]
 
+    # -------------------------------------------------------------- tokens
+
+    _NFT_NO_SUBID = 'ffffffffffffffff'  # subid of fungible outputs (-1 le)
+
+    @classmethod
+    def _is_nft_token_id(cls, token_id_hex: str) -> bool:
+        return len(token_id_hex) == 80 and token_id_hex[64:] != cls._NFT_NO_SUBID
+
+    def get_token_utxos(self, token_id_hex: Optional[str] = None):
+        """Unspent token outputs, optionally filtered to one token id."""
+        utxos = []
+        with self._blsct_lock:
+            for ohash, d in self.blsct_outputs.items():
+                if d.get('spent_by') or not d.get('token_id') or d.get('staked'):
+                    continue
+                if token_id_hex and d['token_id'] != token_id_hex:
+                    continue
+                utxos.append(BlsctUtxo(ohash, dict(d)))
+        return utxos
+
+    def get_token_balances(self) -> Dict[str, int]:
+        """{token_id_hex: amount} over unspent fungible token outputs."""
+        balances = {}  # type: Dict[str, int]
+        for u in self.get_token_utxos():
+            tid = u.d['token_id']
+            if self._is_nft_token_id(tid):
+                continue
+            balances[tid] = balances.get(tid, 0) + u.d['amount']
+        return balances
+
+    def get_nfts(self) -> List[dict]:
+        """Unspent NFT outputs (token outputs with a concrete subid)."""
+        nfts = []
+        for u in self.get_token_utxos():
+            tid = u.d['token_id']
+            if not self._is_nft_token_id(tid):
+                continue
+            nfts.append({
+                'token_id': tid,
+                'token': tid[:64],
+                'subid': int.from_bytes(bytes.fromhex(tid[64:]), 'little'),
+                'amount': u.d['amount'],
+                'output_hash': u.output_hash,
+                'height': u.d.get('height', 0),
+                'memo': u.d.get('memo', ''),
+            })
+        nfts.sort(key=lambda n: (n['token'], n['subid']))
+        return nfts
+
+    def create_token_transaction(self, token_id_hex: str,
+                                 recipients: Sequence[Tuple[str, int, str]],
+                                 password=None,
+                                 fixed_fee: Optional[int] = None):
+        """Send a token (or an NFT: amount 1 of an NFT token id).
+        The fee is paid in NAV from the wallet's spendable coins.
+        Returns navio_blsct.BuiltTx."""
+        utxos, recs, _fee = self._plan_token_send(token_id_hex, recipients)
+        keyring = self._spending_keyring(password)
+        return navio_blsct.build_signed_tx(
+            keyring, utxos, recs, fixed_fee=fixed_fee)
+
+    def _plan_token_send(self, token_id_hex: str,
+                         recipients: Sequence[Tuple[str, int, str]]):
+        total_out = sum(a for (_, a, _) in recipients)
+        # token inputs
+        token_coins = [u for u in self.get_token_utxos(token_id_hex)
+                       if u.d.get('height', 0) > 0]
+        token_coins.sort(key=lambda c: -c.d['amount'])
+        t_selected = []
+        t_amt = 0
+        for c in token_coins:
+            if t_amt >= total_out:
+                break
+            t_selected.append(c)
+            t_amt += c.d['amount']
+        if t_amt < total_out:
+            raise NotEnoughFunds()
+        # NAV inputs for the fee
+        nav_coins = self.get_spendable_coins()
+        nav_coins.sort(key=lambda c: -c.d['amount'])
+        est_fee = lambda n: (n + len(recipients) + 4) * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        n_selected = []
+        n_amt = 0
+        for c in nav_coins:
+            if n_amt >= est_fee(len(t_selected) + len(n_selected)):
+                break
+            n_selected.append(c)
+            n_amt += c.d['amount']
+        if n_amt < est_fee(len(t_selected) + len(n_selected)):
+            raise NotEnoughFunds()
+        utxos = ([self._coin_to_spendable(c) for c in t_selected]
+                 + [self._coin_to_spendable(c) for c in n_selected])
+        recs = [Recipient(addr, amount, memo or '', token_id_hex=token_id_hex)
+                for (addr, amount, memo) in recipients]
+        return utxos, recs, est_fee(len(t_selected) + len(n_selected))
+
+    def get_token_display_name(self, token_id_hex: str) -> str:
+        names = self.db.get('blsct_token_names') or {}
+        name = names.get(token_id_hex) or names.get(token_id_hex[:64])
+        return name or (token_id_hex[:16] + '...')
+
+    def _remember_token_name(self, token_id_hex: str, name: str):
+        names = self.db.get('blsct_token_names') or {}
+        if names.get(token_id_hex[:64]) != name:
+            names[token_id_hex[:64]] = name
+            self.db.put('blsct_token_names', names)
+
+    def create_token(self, metadata: Dict[str, str], total_supply: int,
+                     is_nft: bool = False, password=None):
+        """Create this wallet's token / NFT collection. One per wallet (the
+        token key is derived from the seed). Returns BuiltTx."""
+        keyring = self._spending_keyring(password)
+        coins = self.get_spendable_coins()
+        coins.sort(key=lambda c: -c.d['amount'])
+        est = 4 * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        selected, amt = [], 0
+        for c in coins:
+            if amt >= est:
+                break
+            selected.append(c)
+            amt += c.d['amount']
+        if amt < est:
+            raise NotEnoughFunds()
+        built = navio_blsct.build_create_token_tx(
+            keyring, [self._coin_to_spendable(c) for c in selected],
+            metadata, total_supply, is_nft)
+        self.db.put('blsct_token_meta', {
+            'metadata': dict(metadata or {}),
+            'total_supply': int(total_supply),
+            'is_nft': bool(is_nft),
+            'create_txid': built.txid,
+        })
+        return built
+
+    def _mint_common(self, build, password):
+        keyring = self._spending_keyring(password)
+        coins = self.get_spendable_coins()
+        coins.sort(key=lambda c: -c.d['amount'])
+        est = 4 * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        selected, amt = [], 0
+        for c in coins:
+            if amt >= est:
+                break
+            selected.append(c)
+            amt += c.d['amount']
+        if amt < est:
+            raise NotEnoughFunds()
+        built = build(keyring, [self._coin_to_spendable(c) for c in selected])
+        # learn our token id from the mint output and bind the stored metadata
+        try:
+            parsed = navio_blsct.parse_tx_hex(built.raw_hex)
+            for out in parsed.outputs:
+                if out.token_id and out.token_id != bytes(32):
+                    tid = (out.token_id.hex()
+                           + out.token_nft_id.to_bytes(8, 'little', signed=True).hex())
+                    meta = (self.db.get('blsct_token_meta') or {}).get('metadata') or {}
+                    if meta.get('name'):
+                        self._remember_token_name(tid, meta['name'])
+                    break
+        except Exception:
+            self.logger.exception('could not extract token id from mint tx')
+        return built
+
+    def mint_token(self, dest_address: str, amount: int, password=None):
+        """Mint units of this wallet's fungible token. Returns BuiltTx."""
+        return self._mint_common(
+            lambda keyring, utxos: navio_blsct.build_mint_token_tx(
+                keyring, utxos, dest_address, amount),
+            password)
+
+    def mint_nft(self, dest_address: str, nft_id: int,
+                 metadata: Dict[str, str], password=None):
+        """Mint one NFT of this wallet's collection. Returns BuiltTx."""
+        return self._mint_common(
+            lambda keyring, utxos: navio_blsct.build_mint_nft_tx(
+                keyring, utxos, dest_address, nft_id, metadata),
+            password)
+
+    def get_staking_rewards_sat(self) -> int:
+        """Total staking rewards ever received: outputs on the staking
+        sub-account that are not staked commitments, plus outputs to any
+        delegation reward address. Includes already-spent rewards."""
+        with self._blsct_lock:
+            reward_addrs = set()
+            for d in self.blsct_outputs.values():
+                deleg = d.get('delegation') or {}
+                if deleg.get('reward_address'):
+                    reward_addrs.add(deleg['reward_address'])
+            total = 0
+            for d in self.blsct_outputs.values():
+                if d.get('token_id') or d.get('staked'):
+                    continue
+                if d.get('account') == STAKING_ACCOUNT or d.get('address') in reward_addrs:
+                    total += d['amount']
+        return total
+
     def get_staked_balance_sat(self) -> int:
         return sum(u.d['amount'] for u in self.get_staked_outputs())
 
@@ -455,6 +695,8 @@ class Blsct_Wallet(Abstract_Wallet):
         events = {}
         with self._blsct_lock:
             for ohash, d in self.blsct_outputs.items():
+                if d.get('token_id'):
+                    continue  # token amounts are not NAV; shown in the tokens view
                 rtx = d.get('tx_hash')
                 if rtx:
                     ev = events.setdefault(rtx, {'height': d.get('height', 0), 'delta': 0, 'memos': []})
@@ -509,6 +751,52 @@ class Blsct_Wallet(Abstract_Wallet):
                 'amount_sat': it['amount_sat'],
             }
 
+    def is_onchain_invoice_paid(self, invoice) -> Tuple[bool, Optional[int]]:
+        """Payment detection for receive requests: sum our recorded outputs
+        to the request address (the base implementation walks adb structures
+        a BLSCT wallet does not populate)."""
+        addr = invoice.get_address()
+        if not addr:
+            return False, None
+        amount_sat = invoice.get_amount_sat() or 0
+        local_height = self.network.get_local_height() if self.network else 0
+        total = 0
+        confs = []
+        with self._blsct_lock:
+            for d in self.blsct_outputs.values():
+                if d.get('address') != addr or d.get('token_id'):
+                    continue
+                total += d['amount']
+                h = d.get('height') or 0
+                confs.append(max(0, local_height - h + 1) if h > 0 else 0)
+        if total <= 0 or (amount_sat and total < amount_sat):
+            return False, None
+        return True, (min(confs) if confs else 0)
+
+    def _on_incoming_output(self, *, address: str, amount: int, account: int,
+                            staked: bool, token_id: Optional[str],
+                            near_tip: bool):
+        """Called by the synchronizer when a new output of ours is recorded."""
+        if account != MAIN_ACCOUNT or staked or token_id:
+            return
+        try:
+            req = self.get_request_by_addr(address)
+            if req:
+                util.trigger_callback(
+                    'request_status', self, req.get_id(), self.get_invoice_status(req))
+        except Exception:
+            self.logger.exception('request status update failed')
+        if near_tip:
+            # live payment (not initial catch-up scan): notify the GUI
+            util.trigger_callback('blsct_payment_received', self, address, amount)
+
+    def get_tx_status(self, tx_hash, tx_mined_info):
+        # raw txs are not stored locally, so the base implementation would
+        # report unconfirmed txs as "unknown"
+        if tx_mined_info.conf == 0:
+            return 0, _('Unconfirmed')
+        return super().get_tx_status(tx_hash, tx_mined_info)
+
     def get_num_parents(self, txid: str):
         # no public parent-tx graph for confidential outputs
         return None
@@ -540,6 +828,8 @@ class Blsct_Wallet(Abstract_Wallet):
             out[it['txid']] = {
                 'txid': it['txid'],
                 'lightning': False,
+                'incoming': it['amount_sat'] > 0,
+                'complete': True,
                 'value': amount,
                 'bc_value': amount,
                 'ln_value': Satoshis(0),
@@ -678,12 +968,26 @@ class Blsct_Wallet(Abstract_Wallet):
 
     # ------------------------------------------------------------------ send
 
+    def get_view_key_pair(self) -> Tuple[str, str]:
+        """(private view key hex, public spend key hex) -- enough to create a
+        watch-only wallet that sees this wallet's history and balances."""
+        return (self.keystore.view_key_hex, self.keystore.spend_pub_hex)
+
+    def get_view_key_str(self) -> str:
+        vk, sp = self.get_view_key_pair()
+        return f'{vk}:{sp}'
+
     def _spending_keyring(self, password) -> BlsctKeyRing:
+        if self.is_watching_only():
+            raise UserFacingException(
+                _('This is a watching-only wallet: it cannot spend or stake.'))
         keyring = self.keyring
         if self.keystore.has_password():
             self.keystore.check_password(password)
         if not keyring.can_spend():
-            keyring = BlsctKeyRing(self.keystore.get_seed_hex(password))
+            keyring = BlsctKeyRing(
+                self.keystore.get_seed_hex(password),
+                passphrase=self.keystore.get_passphrase(password) or None)
             keyring.subaddr_by_hashid = dict(self.keyring.subaddr_by_hashid)
         return keyring
 
@@ -698,15 +1002,14 @@ class Blsct_Wallet(Abstract_Wallet):
             account=d['account'],
             index=d['addr_index'],
             staked_commitment=bool(d.get('staked')),
+            token_id_hex=d.get('token_id'),
         )
 
-    def create_blsct_transaction(self, recipients: Sequence[Tuple[str, int, str]],
-                                 password=None, fixed_fee: Optional[int] = None,
-                                 domain_coins: Optional[Sequence[str]] = None,
-                                 subtract_fee_from_amount: bool = False):
-        """recipients: [(nav1 address, amount_sats, memo)]
-        Returns navio_blsct.BuiltTx."""
-        keyring = self._spending_keyring(password)
+    def _plan_send(self, recipients: Sequence[Tuple[str, int, str]],
+                   domain_coins: Optional[Sequence[str]] = None,
+                   subtract_fee_from_amount: bool = False):
+        """Coin selection for a plain send; keyring-independent.
+        -> (utxos, recipients, est_fee)"""
         coins = self.get_spendable_coins()
         if domain_coins:
             coins = [c for c in coins if c.output_hash in domain_coins]
@@ -724,8 +1027,21 @@ class Blsct_Wallet(Abstract_Wallet):
             if not (subtract_fee_from_amount and selected_amt >= total_out):
                 raise NotEnoughFunds()
         utxos = [self._coin_to_spendable(c) for c in selected]
+        recs = [r if isinstance(r, Recipient) else Recipient(r[0], r[1], r[2] or '')
+                for r in recipients]
+        return utxos, recs, est_fee(len(selected))
+
+    def create_blsct_transaction(self, recipients: Sequence[Tuple[str, int, str]],
+                                 password=None, fixed_fee: Optional[int] = None,
+                                 domain_coins: Optional[Sequence[str]] = None,
+                                 subtract_fee_from_amount: bool = False):
+        """recipients: [(nav1 address, amount_sats, memo)]
+        Returns navio_blsct.BuiltTx."""
+        keyring = self._spending_keyring(password)
+        utxos, recs, _fee = self._plan_send(
+            recipients, domain_coins, subtract_fee_from_amount)
         built = navio_blsct.build_signed_tx(
-            keyring, utxos, list(recipients),
+            keyring, utxos, recs,
             fixed_fee=fixed_fee,
             subtract_fee_from_amount=subtract_fee_from_amount)
         return built
@@ -801,7 +1117,13 @@ class Blsct_Wallet(Abstract_Wallet):
         elif reward_address:
             raise UserFacingException('reward_address requires a delegate key')
 
+        utxos, recs, _fee = self._plan_stake(
+            amount, delegation=delegation, consolidate=consolidate)
         keyring = self._spending_keyring(password)
+        return navio_blsct.build_signed_tx(keyring, utxos, recs,
+                                           fixed_fee=fixed_fee)
+
+    def _plan_stake(self, amount: int, *, delegation, consolidate: bool = True):
         staked_inputs = []
         if consolidate:
             want_id = delegation.id() if delegation else ''
@@ -833,8 +1155,26 @@ class Blsct_Wallet(Abstract_Wallet):
         stake_addr = self._next_staking_address()
         rec = Recipient(stake_addr, total_staked, '', 'StakedCommitment',
                         MIN_STAKE_AMOUNT, delegation)
-        return navio_blsct.build_signed_tx(keyring, utxos, [rec],
-                                           fixed_fee=fixed_fee)
+        return utxos, [rec], est_fee(len(selected) + len(staked_inputs))
+
+    def _parse_stake_delegation(self, delegate_key_hex, reward_address):
+        """Shared validation for stake/delegate params; -> DelegationRequest|None"""
+        if not delegate_key_hex:
+            if reward_address:
+                raise UserFacingException('reward_address requires a delegate key')
+            return None
+        if not navio_blsct.supports_data_predicate():
+            raise UserFacingException(
+                'stake delegation is not supported by the installed '
+                'navio-blsct bindings; please upgrade')
+        key_bytes = self._parse_delegate_key(delegate_key_hex)
+        if not reward_address:
+            reward_address = self.get_unused_address()
+        try:
+            navio_blsct.get_blsct().Address.decode(reward_address)
+        except Exception:
+            raise UserFacingException('invalid reward address')
+        return stake_delegation.DelegationRequest(key_bytes, reward_address)
 
     def create_unstake_transaction(self, amount: Optional[int] = None,
                                    password=None, *,
@@ -896,6 +1236,162 @@ class Blsct_Wallet(Abstract_Wallet):
         utxos = [self._coin_to_spendable(u) for u in selected]
         return navio_blsct.build_signed_tx(keyring, utxos, recipients,
                                            fixed_fee=fixed_fee)
+
+    def _plan_unstake(self, amount: Optional[int] = None, *,
+                      delegate_key_hex: Optional[str] = None):
+        """Same selection logic as create_unstake_transaction, without the
+        keyring. -> (utxos, recipients, est_fee)"""
+        group = [u for u in self.get_staked_outputs() if u.d.get('height', 0) > 0]
+        if delegate_key_hex:
+            key = delegate_key_hex.lower()
+            group = [u for u in group
+                     if (u.d.get('delegation') or {}).get('delegate_key') == key]
+        else:
+            group = [u for u in group if not u.d.get('delegation')]
+        if not group:
+            raise UserFacingException('no matching staked outputs')
+        total_group = sum(u.d['amount'] for u in group)
+        if amount is None:
+            amount = total_group
+        if amount <= 0 or amount > total_group:
+            raise UserFacingException(
+                f'invalid unstake amount (staked in this group: {total_group} sats)')
+        group.sort(key=lambda u: -u.d['amount'])
+        selected = []
+        selected_amt = 0
+        for u in group:
+            if selected_amt >= amount:
+                break
+            selected.append(u)
+            selected_amt += u.d['amount']
+        remainder = selected_amt - amount
+        recipients = []
+        if remainder > 0:
+            if remainder < MIN_STAKE_AMOUNT:
+                raise UserFacingException(
+                    f'the remaining stake would fall below the minimum '
+                    f'({MIN_STAKE_AMOUNT} sats); unstake less or everything')
+            deleg = selected[0].d.get('delegation')
+            delegation = None
+            if deleg:
+                if not navio_blsct.supports_data_predicate():
+                    raise UserFacingException(
+                        'stake delegation is not supported by the installed '
+                        'navio-blsct bindings; please upgrade')
+                delegation = stake_delegation.DelegationRequest(
+                    bytes.fromhex(deleg['delegate_key']), deleg['reward_address'])
+            stake_addr = self._next_staking_address()
+            recipients.append(Recipient(stake_addr, remainder, '',
+                                        'StakedCommitment', MIN_STAKE_AMOUNT,
+                                        delegation))
+        utxos = [self._coin_to_spendable(u) for u in selected]
+        est_fee = (len(utxos) + len(recipients) + 3) * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        return utxos, recipients, est_fee
+
+    # ------------------------------------------------------------- air-gap
+
+    def _airgap_env(self) -> dict:
+        from . import constants
+        return {
+            'genesis_hex': constants.net.GENESIS,
+            'fingerprint_hex': self.get_fingerprint(),
+        }
+
+    def _proposal_from_plan(self, plan) -> dict:
+        from . import airgap
+        utxos, recipients, fee = plan
+        return airgap.make_proposal_payload(
+            **self._airgap_env(), utxos=utxos, recipients=recipients, fee=fee)
+
+    def make_send_proposal(self, recipients, *, domain_coins=None,
+                           subtract_fee_from_amount: bool = False) -> dict:
+        from . import airgap
+        utxos, recs, fee = self._plan_send(
+            recipients, domain_coins, subtract_fee_from_amount)
+        return airgap.make_proposal_payload(
+            **self._airgap_env(), utxos=utxos, recipients=recs, fee=fee,
+            subtract_fee_from_amount=subtract_fee_from_amount)
+
+    def make_stake_proposal(self, amount: int, *,
+                            delegate_key_hex: Optional[str] = None,
+                            reward_address: Optional[str] = None,
+                            consolidate: bool = True) -> dict:
+        if amount <= 0:
+            raise UserFacingException('amount must be positive')
+        delegation = self._parse_stake_delegation(delegate_key_hex, reward_address)
+        return self._proposal_from_plan(
+            self._plan_stake(amount, delegation=delegation, consolidate=consolidate))
+
+    def make_unstake_proposal(self, amount: Optional[int] = None, *,
+                              delegate_key_hex: Optional[str] = None) -> dict:
+        return self._proposal_from_plan(
+            self._plan_unstake(amount, delegate_key_hex=delegate_key_hex))
+
+    def make_token_send_proposal(self, token_id_hex: str, recipients) -> dict:
+        return self._proposal_from_plan(
+            self._plan_token_send(token_id_hex, recipients))
+
+    def check_airgap_proposal(self, payload: dict) -> dict:
+        """Offline-signer side: validate the envelope and structure and
+        return a display summary. Raises UserFacingException on mismatch."""
+        from . import airgap
+        airgap.check_envelope(payload, expected_type='prop', **self._airgap_env())
+        utxos, recipients, fee, subtract = airgap.proposal_to_plan(payload)
+        # classify each proposed output: does it pay this wallet?
+        own = set(self.get_addresses())
+        outputs = []
+        for r in recipients:
+            outputs.append({
+                'address': r.address,
+                'amount': r.amount,
+                'memo': r.memo,
+                'type': r.output_type,
+                'is_mine': r.address in own,
+                'token_id': r.token_id_hex or '',
+                'delegate_key': (r.delegation.delegate_key.hex()
+                                 if r.delegation else ''),
+                'reward_address': (r.delegation.reward_address
+                                   if r.delegation else ''),
+            })
+        return {
+            'outputs': outputs,
+            'fee': fee,
+            'subtract_fee_from_amount': subtract,
+            'total_in': sum(u.amount for u in utxos),
+            'num_inputs': len(utxos),
+            'age_seconds': airgap.proposal_age_seconds(payload),
+        }
+
+    def sign_airgap_proposal(self, payload: dict, password=None) -> dict:
+        """Offline-signer side: build and sign the transaction described by a
+        (checked) proposal; change is derived by this wallet's own builder.
+        Returns the reply payload."""
+        from . import airgap
+        airgap.check_envelope(payload, expected_type='prop', **self._airgap_env())
+        utxos, recipients, fee, subtract = airgap.proposal_to_plan(payload)
+        # make sure the keypool covers every referenced index
+        for u in utxos:
+            self.keyring.ensure_keypool(u.account, u.index + 1)
+        keyring = self._spending_keyring(password)
+        built = navio_blsct.build_signed_tx(
+            keyring, utxos, recipients, fixed_fee=fee,
+            subtract_fee_from_amount=subtract)
+        return airgap.make_reply_payload(
+            **self._airgap_env(), txid_hex=built.txid, raw_hex=built.raw_hex)
+
+    def check_airgap_reply(self, payload: dict) -> Tuple[str, str]:
+        """Online side: validate a signed reply; -> (txid_hex, raw_hex)."""
+        from . import airgap
+        airgap.check_envelope(payload, expected_type='signed', **self._airgap_env())
+        raw = payload.get('raw')
+        txid = payload.get('txid')
+        if not (isinstance(raw, bytes) and raw and isinstance(txid, bytes)
+                and len(txid) == 32):
+            raise UserFacingException(_('Malformed signed transaction payload'))
+        parsed = navio_blsct.parse_tx_hex(raw.hex())
+        if parsed.txid != txid.hex():
+            raise UserFacingException(_('Signed transaction id mismatch'))
+        return txid.hex(), raw.hex()
 
     async def broadcast_blsct_transaction(self, raw_hex: str) -> str:
         if not self.network or not self.network.interface:
@@ -1107,8 +1603,12 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
         if rec is None:
             self.logger.info(f'output {output_hash} matched but did not recover')
             return
-        token_id = (parsed.token_id.hex()
-                    if (parsed.token_id and parsed.token_id != bytes(32)) else None)
+        # full TokenId serialization (token 32B + subid 8B le, signed subid:
+        # fungible outputs carry -1), matching TokenId.serialize()
+        token_id = None
+        if parsed.token_id and parsed.token_id != bytes(32):
+            token_id = (parsed.token_id.hex()
+                        + parsed.token_nft_id.to_bytes(8, 'little', signed=True).hex())
         staked, delegation = wallet._classify_output(parsed)
         wallet._store_output(output_hash,
                              tx_hash=tx_hash, height=height, amount=rec.amount,
@@ -1119,6 +1619,12 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                              staked=staked, delegation=delegation)
         self.logger.info(f'found output {output_hash[:16]} amount={rec.amount} '
                          f'height={height} acct={pair} staked={staked}')
+        local_height = wallet.network.get_local_height() if wallet.network else 0
+        near_tip = height == 0 or height >= local_height - 2
+        d = wallet.blsct_outputs.get(output_hash) or {}
+        wallet._on_incoming_output(
+            address=d.get('address', ''), amount=rec.amount, account=pair[0],
+            staked=staked, token_id=token_id, near_tip=near_tip)
 
 
 # ---------------------------------------------------------------------------
@@ -1126,28 +1632,74 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
 # ---------------------------------------------------------------------------
 
 def create_new_blsct_wallet(*, path, config, password=None, encrypt_file=True,
-                            creation_height: Optional[int] = None) -> dict:
+                            creation_height: Optional[int] = None,
+                            passphrase: str = '') -> dict:
     import os
     return _create_blsct_wallet(os.urandom(32).hex(), path=path, config=config,
                                 password=password, encrypt_file=encrypt_file,
-                                creation_height=creation_height or 0)
+                                creation_height=creation_height or 0,
+                                passphrase=passphrase)
+
+
+def estimate_height_for_date(date_str: str) -> int:
+    """Estimate the chain height at a 'YYYY-MM-DD' date, with a one-day
+    safety margin, for use as a scan starting point. Returns 0 on any
+    parse problem or pre-genesis date."""
+    from . import constants
+    import datetime
+    try:
+        d = datetime.datetime.strptime(date_str.strip(), '%Y-%m-%d')
+        ts = d.replace(tzinfo=datetime.timezone.utc).timestamp()
+    except Exception:
+        return 0
+    genesis_ts = constants.net.GENESIS_TIMESTAMP
+    if not genesis_ts or ts <= genesis_ts:
+        return 0
+    margin = 24 * 3600
+    return max(0, int((ts - genesis_ts - margin) // constants.net.BLOCK_INTERVAL))
+
+
+def is_blsct_view_key_str(text: str) -> bool:
+    """'<view_key_hex(64)>:<spend_pub_hex(96)>' -- the watch-only import format."""
+    text = text.strip()
+    parts = text.split(':')
+    if len(parts) != 2:
+        return False
+    vk, sp = parts
+    if len(vk) != 64 or len(sp) != 96:
+        return False
+    if not all(c in '0123456789abcdefABCDEF' for c in vk + sp):
+        return False
+    try:
+        BlsctKeyRing.from_view_key(vk.lower(), sp.lower())
+        return True
+    except Exception:
+        return False
 
 
 def restore_blsct_wallet_from_text(text: str, *, path, config, password=None,
                                    encrypt_file=True,
-                                   creation_height: int = 0) -> dict:
+                                   creation_height: int = 0,
+                                   passphrase: str = '') -> dict:
     text = ' '.join(text.split())
+    if is_blsct_view_key_str(text):
+        vk, sp = text.lower().split(':')
+        return _create_blsct_watch_wallet(vk, sp, path=path, config=config,
+                                          password=password,
+                                          encrypt_file=encrypt_file,
+                                          creation_height=creation_height)
     if len(text) == 64 and all(ch in '0123456789abcdefABCDEF' for ch in text):
         seed_hex = text.lower()
     else:
         seed_hex = bip39_mnemonic_to_entropy(text).hex()
     return _create_blsct_wallet(seed_hex, path=path, config=config,
                                 password=password, encrypt_file=encrypt_file,
-                                creation_height=creation_height)
+                                creation_height=creation_height,
+                                passphrase=passphrase)
 
 
-def _create_blsct_wallet(seed_hex, *, path, config, password, encrypt_file,
-                         creation_height):
+def _create_blsct_watch_wallet(view_key_hex, spend_pub_hex, *, path, config,
+                               password, encrypt_file, creation_height) -> dict:
     from .storage import WalletStorage, StorageEncryptionVersion
     from .wallet_db import WalletDB
     from .wallet import Wallet
@@ -1157,7 +1709,30 @@ def _create_blsct_wallet(seed_hex, *, path, config, password, encrypt_file,
     if encrypt_file and password:
         storage.set_password(password, StorageEncryptionVersion.USER_PASSWORD)
     db = WalletDB('', storage=storage, upgrade=True)
-    ks = BlsctKeyStore.from_seed_hex(seed_hex)
+    ks = BlsctKeyStore.from_view_key(view_key_hex, spend_pub_hex)
+    db.put('keystore', ks.dump())
+    db.put('wallet_type', 'blsct')
+    db.set_keystore_encryption(False)
+    wallet = Wallet(db, config=config)
+    wallet.blsct_sync['creation_height'] = creation_height
+    wallet.save_db()
+    return {'wallet': wallet, 'watching_only': True,
+            'msg': 'Watch-only BLSCT wallet created. It can see balances and '
+                   'history but cannot spend or stake.'}
+
+
+def _create_blsct_wallet(seed_hex, *, path, config, password, encrypt_file,
+                         creation_height, passphrase: str = ''):
+    from .storage import WalletStorage, StorageEncryptionVersion
+    from .wallet_db import WalletDB
+    from .wallet import Wallet
+    storage = WalletStorage(path, allow_partial_writes=config.WALLET_PARTIAL_WRITES)
+    if storage.file_exists():
+        raise UserFacingException("Remove the existing wallet first!")
+    if encrypt_file and password:
+        storage.set_password(password, StorageEncryptionVersion.USER_PASSWORD)
+    db = WalletDB('', storage=storage, upgrade=True)
+    ks = BlsctKeyStore.from_seed_hex(seed_hex, passphrase=passphrase or '')
     if password:
         ks.update_password(None, password)
     db.put('keystore', ks.dump())

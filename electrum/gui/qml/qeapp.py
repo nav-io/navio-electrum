@@ -34,16 +34,16 @@ from .qeqrscanner import QEQRScanner
 from .qebitcoin import QEBitcoin
 from .qefx import QEFX
 from .qetxfinalizer import QETxFinalizer, QETxRbfFeeBumper, QETxCpfpFeeBumper, QETxCanceller, QETxSweepFinalizer, FeeSlider
+from .qeblsctfinalizer import QEBlsctFinalizer
+from .qestaking import QEStaking
+from .qetokens import QETokens
+from .qeairgap import QEAirgapRequest, QEAirgapSigner
 from .qeinvoice import QEInvoice, QEInvoiceParser
 from .qepiresolver import QEPIResolver
 from .qerequestdetails import QERequestDetails
 from .qetypes import QEAmount, QEBytes
 from .qeaddressdetails import QEAddressDetails
 from .qetxdetails import QETxDetails
-from .qechannelopener import QEChannelOpener
-from .qelnpaymentdetails import QELnPaymentDetails
-from .qechanneldetails import QEChannelDetails
-from .qeswaphelper import QESwapHelper
 from .qewizard import QENewWalletWizard, QEServerConnectWizard, QETermsOfUseWizard
 from .qemodelfilter import QEFilterProxyModel
 from .qebip39recovery import QEBip39RecoveryListModel
@@ -177,7 +177,7 @@ class QEAppController(BaseCrashReporter, QObject):
             global notification
             if not notification:
                 from plyer import notification
-            notification.notify('Electrum', message, app_icon=icon, app_name='Electrum')
+            notification.notify('Navio Electrum', message, app_icon=icon, app_name='Navio Electrum')
         except ImportError:
             self.logger.warning('Notification: needs plyer; `python3 -m pip install plyer`')
         except Exception as e:
@@ -270,6 +270,50 @@ class QEAppController(BaseCrashReporter, QObject):
         sendIntent.putExtra(jIntent.EXTRA_TEXT, jString(data))
         it = jIntent.createChooser(sendIntent, cast('java.lang.CharSequence', jString(title)))
         jpythonActivity.startActivity(it)
+
+    updateAvailable = pyqtSignal([str], arguments=['version'])
+
+    @pyqtSlot()
+    def startUpdateCheck(self):
+        """Compare the running version against the latest GitHub release."""
+        if not self.config.AUTOMATIC_CENTRALIZED_UPDATE_CHECKS:
+            return
+        from electrum.util import make_aiohttp_session, get_asyncio_loop
+        from electrum.version import ELECTRUM_VERSION
+        from electrum._vendor.distutils.version import StrictVersion
+
+        async def check():
+            try:
+                async with make_aiohttp_session(proxy=None, timeout=60) as session:
+                    url = 'https://api.github.com/repos/nav-io/navio-electrum/releases/latest'
+                    async with session.get(url) as result:
+                        release = await result.json(content_type=None)
+                latest = release['tag_name'].lstrip('vV').strip()
+                if StrictVersion(latest) > StrictVersion(ELECTRUM_VERSION):
+                    self.logger.info(f'update available: {latest}')
+                    self.updateAvailable.emit(latest)
+            except Exception as e:
+                self.logger.info(f'update check failed: {e!r}')
+
+        import asyncio
+        asyncio.run_coroutine_threadsafe(check(), get_asyncio_loop())
+
+    @pyqtSlot(result=str)
+    def currentChainName(self):
+        from electrum import constants
+        return constants.net.NET_NAME
+
+    @pyqtSlot(str, result=bool)
+    def setDefaultChain(self, chain_name: str) -> bool:
+        """Persist the chain to use from the next launch on. The app must be
+        restarted for it to take effect."""
+        from electrum.simple_config import SimpleConfig
+        try:
+            SimpleConfig.set_persisted_default_chain(chain_name)
+            return True
+        except Exception as e:
+            self.logger.error(f'could not persist default chain: {e!r}')
+            return False
 
     @pyqtSlot(result=bool)
     def isMaxBrightnessOnQrDisplayEnabled(self):
@@ -494,15 +538,16 @@ class ElectrumQmlApplication(QGuiApplication):
         qmlRegisterType(QEQRScanner, 'org.electrum', 1, 0, 'QRScanner')
         qmlRegisterType(QEFX, 'org.electrum', 1, 0, 'FX')
         qmlRegisterType(QETxFinalizer, 'org.electrum', 1, 0, 'TxFinalizer')
+        qmlRegisterType(QEBlsctFinalizer, 'org.electrum', 1, 0, 'BlsctFinalizer')
+        qmlRegisterType(QEStaking, 'org.electrum', 1, 0, 'StakingBackend')
+        qmlRegisterType(QETokens, 'org.electrum', 1, 0, 'TokensBackend')
+        qmlRegisterType(QEAirgapRequest, 'org.electrum', 1, 0, 'AirgapRequest')
+        qmlRegisterType(QEAirgapSigner, 'org.electrum', 1, 0, 'AirgapSigner')
         qmlRegisterType(QEPIResolver, 'org.electrum', 1, 0, 'PIResolver')
         qmlRegisterType(QEInvoice, 'org.electrum', 1, 0, 'Invoice')
         qmlRegisterType(QEInvoiceParser, 'org.electrum', 1, 0, 'InvoiceParser')
         qmlRegisterType(QEAddressDetails, 'org.electrum', 1, 0, 'AddressDetails')
         qmlRegisterType(QETxDetails, 'org.electrum', 1, 0, 'TxDetails')
-        qmlRegisterType(QEChannelOpener, 'org.electrum', 1, 0, 'ChannelOpener')
-        qmlRegisterType(QELnPaymentDetails, 'org.electrum', 1, 0, 'LnPaymentDetails')
-        qmlRegisterType(QEChannelDetails, 'org.electrum', 1, 0, 'ChannelDetails')
-        qmlRegisterType(QESwapHelper, 'org.electrum', 1, 0, 'SwapHelper')
         qmlRegisterType(QERequestDetails, 'org.electrum', 1, 0, 'RequestDetails')
         qmlRegisterType(QETxRbfFeeBumper, 'org.electrum', 1, 0, 'TxRbfFeeBumper')
         qmlRegisterType(QETxCpfpFeeBumper, 'org.electrum', 1, 0, 'TxCpfpFeeBumper')

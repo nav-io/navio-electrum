@@ -15,7 +15,6 @@ ElDialog {
     property var piResolver  // type: PIResolver
 
     signal txFound(data: string)
-    signal channelBackupFound(data: string)
 
     header: null
     padding: 0
@@ -34,8 +33,6 @@ ElDialog {
         data = data.trim()
         if (bitcoin.isRawTx(data)) {
             txFound(data)
-        } else if (Daemon.currentWallet.isValidChannelBackup(data)) {
-            channelBackupFound(data)
         } else {
             piResolver.recipient = data
         }
@@ -57,9 +54,7 @@ ElDialog {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            hint: Daemon.currentWallet.isLightning
-                ? qsTr('Scan an Invoice, an Address, an LNURL, a PSBT or a Channel Backup')
-                : qsTr('Scan an Invoice, an Address, an LNURL or a PSBT')
+            hint: qsTr('Scan an Invoice or an Address')
 
             onFoundText: (data) => {
                 dialog.dispatch(data)

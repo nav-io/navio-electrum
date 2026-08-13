@@ -235,22 +235,9 @@ ApplicationWindow
                             }
                         }
 
-                        LightningNetworkStatusIndicator {
-                            id: lnnsi
-                        }
                         OnchainNetworkStatusIndicator { }
                     }
                 }
-            }
-
-            // hack to force relayout of toolbar
-            // since qt6 LightningNetworkStatusIndicator.visible doesn't trigger relayout(?)
-            Item {
-                Layout.preferredHeight: 1
-                Layout.topMargin: -1
-                Layout.preferredWidth: lnnsi.visible
-                    ? 1
-                    : 2
             }
         }
     }
@@ -466,11 +453,6 @@ ApplicationWindow
         }
     }
 
-    property alias channelOpenProgressDialog: _channelOpenProgressDialog
-    ChannelOpenProgressDialog {
-        id: _channelOpenProgressDialog
-    }
-
     property alias signVerifyMessageDialog: _signVerifyMessageDialog
     Component {
         id: _signVerifyMessageDialog
@@ -479,58 +461,23 @@ ApplicationWindow
         }
     }
 
-    property alias nostrSwapServersDialog: _nostrSwapServersDialog
-    Component {
-        id: _nostrSwapServersDialog
-        NostrSwapServersDialog {
-            onClosed: destroy()
-        }
-    }
-
-    Component {
-        id: swapDialog
-        SwapDialog {
-            id: _swapdialog
-            onClosed: destroy()
-            swaphelper: SwapHelper {
-                id: _swaphelper
-                wallet: Daemon.currentWallet
-                onAuthRequired: (method, authMessage) => {
-                    app.handleAuthRequired(_swaphelper, method, authMessage)
-                }
-                onError: (message) => {
-                    var dialog = app.messageDialog.createObject(app, {
-                        title: qsTr('Error'),
-                        iconSource: Qt.resolvedUrl('../../icons/warning.png'),
-                        text: message
-                    })
-                    dialog.open()
-                }
-                onUndefinedNPub: {
-                    var dialog = app.nostrSwapServersDialog.createObject(app, {
-                        swaphelper: _swaphelper,
-                        selectedPubkey: Config.swapServerNPub
-                    })
-                    dialog.accepted.connect(function() {
-                        Config.swapServerNPub = dialog.selectedPubkey
-                        _swaphelper.setReadyState()
-                    })
-                    dialog.rejected.connect(function() {
-                        _swaphelper.npubSelectionCancelled()
-                    })
-                    dialog.open()
-                }
-            }
-        }
-    }
-
     NotificationPopup {
         id: notificationPopup
         width: parent.width
     }
 
+    Connections {
+        target: AppController
+        function onUpdateAvailable(version) {
+            infobanner.show(qsTr('Navio Electrum %1 is available').arg(version), function() {
+                Qt.openUrlExternally('https://github.com/nav-io/navio-electrum/releases/latest')
+            })
+        }
+    }
+
     Component.onCompleted: {
         coverTimer.start()
+        AppController.startUpdateCheck()
 
         if (AppController.isAndroid()) {
             app.scanDialog = _scanDialog
@@ -616,7 +563,7 @@ ApplicationWindow
             stack.pop()
         } else {
             var dialog = app.messageDialog.createObject(app, {
-                title: qsTr('Close Electrum?'),
+                title: qsTr('Close Navio Electrum?'),
                 yesno: true
             })
             dialog.accepted.connect(function() {
@@ -892,10 +839,6 @@ ApplicationWindow
         dialog.open()
     }
 
-    function startSwap() {
-        var swapdialog = swapDialog.createObject(app)
-        swapdialog.open()
-    }
 
     property var _lastActive: 0 // record time of last activity
     property bool _lockDialogShown: false

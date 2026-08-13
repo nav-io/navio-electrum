@@ -9,6 +9,7 @@ Item {
     id: scanner
 
     property bool active: false
+    property bool continuous: false
     property string url
     property string hint
 
@@ -153,11 +154,26 @@ Item {
             scanner.active = false
             scanner.foundText(qr.data)
         }
+        function onDataScanned(data) {
+            // continuous mode: report each decode, keep the camera running
+            scanner.foundText(data)
+        }
     }
 
     QRParser {
         id: qr
+        continuous: scanner.continuous
         videoSink: loader.item.vo.videoSink
+    }
+
+    Label {
+        visible: !qr.available
+        anchors.centerIn: parent
+        width: parent.width * 4/5
+        text: qsTr('QR scanning is not available (QR detection library not found). You can still paste or type below.')
+        wrapMode: Text.Wrap
+        horizontalAlignment: Text.AlignHCenter
+        color: constants.mutedForeground
     }
 
 }

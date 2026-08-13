@@ -648,6 +648,18 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
             self.show_error(_('No amount'))
             return
 
+        if self.wallet.is_watching_only():
+            # air-gapped flow: propose, sign offline, broadcast here
+            from .airgap_dialogs import AirgapSignDialog
+            try:
+                proposal = self.wallet.make_send_proposal(
+                    recipients, subtract_fee_from_amount=is_max)
+            except UserFacingException as e:
+                self.show_error(str(e))
+                return
+            AirgapSignDialog(self.window, proposal).exec()
+            return
+
         password = None
         if self.wallet.has_keystore_encryption():
             password = self.window.password_dialog(parent=self)

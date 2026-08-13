@@ -82,7 +82,8 @@ requirements =
     pycryptodomex,
     pyqt6sip,
     pyqt6,
-    libzbar
+    libzbar,
+    navio_blsct
 
 # (str) Presplash of the application
 presplash.filename = %(source.dir)s/electrum/gui/icons/electrum_presplash.png
@@ -200,7 +201,7 @@ android.add_resources = electrum/gui/qml/android_res/layout:layout
 #android.ouya.icon.filename = %(source.dir)s/data/ouya_icon.png
 
 # (str) XML file to include as an intent filters in <activity> tag
-android.manifest.intent_filters = contrib/android/bitcoin_intent.xml
+android.manifest.intent_filters = contrib/android/navio_intent.xml
 
 # (str) launchMode to set for the main activity
 android.manifest.launch_mode = singleTask

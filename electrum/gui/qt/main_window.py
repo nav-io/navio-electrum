@@ -296,10 +296,8 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
 
         self.contacts.fetch_openalias(self.config)
 
-        # note: the upstream update-check infrastructure (electrum.org
-        # version announcements and their signing keys) does not apply to
-        # Navio Electrum, so we neither prompt for nor run update checks.
-        # Releases are announced at https://github.com/nav-io/navio-electrum.
+        # the update check queries the latest GitHub release of
+        # nav-io/navio-electrum (see update_checker.py)
 
         self._update_check_thread = None
         if config.AUTOMATIC_CENTRALIZED_UPDATE_CHECKS:
@@ -794,6 +792,11 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
 
         if self.wallet.wallet_type == 'blsct':
             self.wallet_menu.addAction(_("Sta&king"), self.show_staking_dialog)
+            self.wallet_menu.addAction(_("&Tokens"), self.show_tokens_dialog)
+            self.wallet_menu.addAction(_("&View key"), self.show_view_key_dialog)
+            if not self.wallet.is_watching_only():
+                self.wallet_menu.addAction(
+                    _("Air-&gapped signer"), self.show_airgap_signer_dialog)
 
         self.wallet_menu.addAction(_("Find"), self.toggle_search).setShortcut(QKeySequence("Ctrl+F"))
         self.wallet_menu.addSeparator()
@@ -2036,6 +2039,28 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
     def show_staking_dialog(self):
         from .staking_dialog import StakingDialog
         StakingDialog(self).exec()
+
+    def show_tokens_dialog(self):
+        from .tokens_dialog import TokensDialog
+        TokensDialog(self).exec()
+
+    def show_airgap_signer_dialog(self):
+        from .airgap_dialogs import AirgapSignerDialog
+        AirgapSignerDialog(self).exec()
+
+    def show_view_key_dialog(self):
+        vk_str = self.wallet.get_view_key_str()
+        self.show_message(
+            '\n'.join([
+                _('View key (share to let someone watch this wallet):'),
+                '',
+                vk_str,
+                '',
+                _('Anyone with this string can see this wallet\'s balances and '
+                  'history, but cannot spend or stake. Use "Watch-only wallet '
+                  '(view key)" when creating a wallet to import it.'),
+            ]),
+            title=_('View key'))
 
     def show_wallet_info(self):
         from .wallet_info_dialog import WalletInfoDialog
