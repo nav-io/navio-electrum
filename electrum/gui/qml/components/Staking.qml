@@ -61,6 +61,13 @@ Pane {
             FormattedAmount {
                 amount: staking.spendableBalance
             }
+            Label {
+                text: qsTr('Rewards earned') + ':'
+                color: Material.accentColor
+            }
+            FormattedAmount {
+                amount: staking.earnedRewards
+            }
         }
 
         Frame {

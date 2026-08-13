@@ -29,6 +29,7 @@ class QEStaking(AuthMixin, QObject):
         self._busy = False
         self._staked_balance = QEAmount()
         self._spendable_balance = QEAmount()
+        self._earned_rewards = QEAmount()
         self._pending = None  # (make_tx, success_message)
 
     walletChanged = pyqtSignal()
@@ -83,6 +84,12 @@ class QEStaking(AuthMixin, QObject):
         sats = self._wallet.wallet.get_staked_balance_sat() if self._wallet else 0
         self._staked_balance.satsInt = sats
         return self._staked_balance
+
+    @pyqtProperty(QEAmount, notify=stakedOutputsChanged)
+    def earnedRewards(self):
+        sats = self._wallet.wallet.get_staking_rewards_sat() if self._wallet else 0
+        self._earned_rewards.satsInt = sats
+        return self._earned_rewards
 
     @pyqtProperty(QEAmount, notify=stakedOutputsChanged)
     def spendableBalance(self):

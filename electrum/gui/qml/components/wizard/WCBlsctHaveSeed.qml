@@ -19,6 +19,7 @@ WizardComponent {
         wizard_data['seed_type'] = 'blsct'
         wizard_data['seed_variant'] = 'bip39'
         wizard_data['seed_extend'] = false
+        wizard_data['creation_date'] = creationdate.text.trim()
     }
 
     function checkValid() {
@@ -57,6 +58,23 @@ WizardComponent {
                     root._seedValid = false
                     validationTimer.restart()
                 }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                Layout.topMargin: constants.paddingMedium
+                wrapMode: Text.Wrap
+                font.pixelSize: constants.fontSizeSmall
+                color: constants.mutedForeground
+                text: qsTr('Wallet creation date (optional). Skips scanning blocks older than this, making the restore much faster. Leave empty to scan the whole chain.')
+            }
+
+            TextField {
+                id: creationdate
+                Layout.fillWidth: true
+                font.family: FixedFont
+                placeholderText: qsTr('YYYY-MM-DD')
+                inputMethodHints: Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText
             }
         }
     }

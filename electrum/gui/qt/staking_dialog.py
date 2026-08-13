@@ -84,10 +84,13 @@ class StakingDialog(WindowModalDialog):
             self.tree.addTopLevelItem(item)
         total = sum(u.d['amount'] for u in staked)
         spendable = self.wallet.get_spendable_balance_sat()
+        rewards = self.wallet.get_staking_rewards_sat()
         self.balance_label.setText(
             _('Staked: {}').format(self.window.format_amount_and_units(total))
             + '    '
-            + _('Available to stake: {}').format(self.window.format_amount_and_units(spendable)))
+            + _('Available to stake: {}').format(self.window.format_amount_and_units(spendable))
+            + '    '
+            + _('Rewards earned: {}').format(self.window.format_amount_and_units(rewards)))
 
     # --------------------------------------------------------------- staking
 

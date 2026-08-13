@@ -19,6 +19,7 @@ WizardComponent {
         wizard_data['seed_type'] = 'blsct'
         wizard_data['seed_variant'] = 'bip39'
         wizard_data['seed_extend'] = false
+        wizard_data['creation_date'] = creationdate.text.trim()
     }
 
     function checkValid() {
@@ -63,6 +64,53 @@ WizardComponent {
                 visible: viewkeytext.text != ''
                 color: root._keyValid ? 'green' : 'red'
                 text: root._keyValid ? qsTr('Valid view key') : qsTr('Not a valid view key')
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                FlatButton {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 1
+                    text: qsTr('Paste')
+                    icon.source: '../../../icons/copy_bw.png'
+                    onClicked: {
+                        viewkeytext.text = AppController.clipboardToText().trim()
+                    }
+                }
+                FlatButton {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 1
+                    text: qsTr('Scan QR')
+                    icon.source: '../../../icons/qrcode_white.png'
+                    onClicked: {
+                        var scanner = app.scanDialog.createObject(root, {
+                            hint: qsTr('Scan the view key QR code')
+                        })
+                        scanner.onFoundText.connect(function(data) {
+                            viewkeytext.text = data.trim()
+                            scanner.close()
+                        })
+                        scanner.open()
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                Layout.topMargin: constants.paddingMedium
+                wrapMode: Text.Wrap
+                font.pixelSize: constants.fontSizeSmall
+                color: constants.mutedForeground
+                text: qsTr('Wallet creation date (optional). Skips scanning blocks older than this, making the restore much faster.')
+            }
+
+            TextField {
+                id: creationdate
+                Layout.fillWidth: true
+                font.family: FixedFont
+                placeholderText: qsTr('YYYY-MM-DD')
+                inputMethodHints: Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText
             }
 
             InfoTextArea {

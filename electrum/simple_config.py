@@ -952,7 +952,7 @@ Warning: setting this to too low will result in lots of payment failures."""),
     HWD_SESSION_TIMEOUT = ConfigVar('session_timeout', default=300, type_=int)
     CLI_TIMEOUT = ConfigVar('timeout', default=60.0, type_=float, convert_setter=lambda v: float(v))
     AUTOMATIC_CENTRALIZED_UPDATE_CHECKS = ConfigVar(
-        'check_updates', default=False, type_=bool,
+        'check_updates', default=True, type_=bool,
         short_desc=lambda: _("Automatically check for software updates"),
     )
     WRITE_LOGS_TO_DISK = ConfigVar(

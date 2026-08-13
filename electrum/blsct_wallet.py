@@ -470,6 +470,24 @@ class Blsct_Wallet(Abstract_Wallet):
         """Unspent staked commitments (confirmed and unconfirmed)."""
         return [u for u in self.get_utxos() if u.d.get('staked')]
 
+    def get_staking_rewards_sat(self) -> int:
+        """Total staking rewards ever received: outputs on the staking
+        sub-account that are not staked commitments, plus outputs to any
+        delegation reward address. Includes already-spent rewards."""
+        with self._blsct_lock:
+            reward_addrs = set()
+            for d in self.blsct_outputs.values():
+                deleg = d.get('delegation') or {}
+                if deleg.get('reward_address'):
+                    reward_addrs.add(deleg['reward_address'])
+            total = 0
+            for d in self.blsct_outputs.values():
+                if d.get('token_id') or d.get('staked'):
+                    continue
+                if d.get('account') == STAKING_ACCOUNT or d.get('address') in reward_addrs:
+                    total += d['amount']
+        return total
+
     def get_staked_balance_sat(self) -> int:
         return sum(u.d['amount'] for u in self.get_staked_outputs())
 
@@ -534,6 +552,45 @@ class Blsct_Wallet(Abstract_Wallet):
                 'height': it['height'],
                 'amount_sat': it['amount_sat'],
             }
+
+    def is_onchain_invoice_paid(self, invoice) -> Tuple[bool, Optional[int]]:
+        """Payment detection for receive requests: sum our recorded outputs
+        to the request address (the base implementation walks adb structures
+        a BLSCT wallet does not populate)."""
+        addr = invoice.get_address()
+        if not addr:
+            return False, None
+        amount_sat = invoice.get_amount_sat() or 0
+        local_height = self.network.get_local_height() if self.network else 0
+        total = 0
+        confs = []
+        with self._blsct_lock:
+            for d in self.blsct_outputs.values():
+                if d.get('address') != addr or d.get('token_id'):
+                    continue
+                total += d['amount']
+                h = d.get('height') or 0
+                confs.append(max(0, local_height - h + 1) if h > 0 else 0)
+        if total <= 0 or (amount_sat and total < amount_sat):
+            return False, None
+        return True, (min(confs) if confs else 0)
+
+    def _on_incoming_output(self, *, address: str, amount: int, account: int,
+                            staked: bool, token_id: Optional[str],
+                            near_tip: bool):
+        """Called by the synchronizer when a new output of ours is recorded."""
+        if account != MAIN_ACCOUNT or staked or token_id:
+            return
+        try:
+            req = self.get_request_by_addr(address)
+            if req:
+                util.trigger_callback(
+                    'request_status', self, req.get_id(), self.get_invoice_status(req))
+        except Exception:
+            self.logger.exception('request status update failed')
+        if near_tip:
+            # live payment (not initial catch-up scan): notify the GUI
+            util.trigger_callback('blsct_payment_received', self, address, amount)
 
     def get_tx_status(self, tx_hash, tx_mined_info):
         # raw txs are not stored locally, so the base implementation would
@@ -1166,6 +1223,12 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                              staked=staked, delegation=delegation)
         self.logger.info(f'found output {output_hash[:16]} amount={rec.amount} '
                          f'height={height} acct={pair} staked={staked}')
+        local_height = wallet.network.get_local_height() if wallet.network else 0
+        near_tip = height == 0 or height >= local_height - 2
+        d = wallet.blsct_outputs.get(output_hash) or {}
+        wallet._on_incoming_output(
+            address=d.get('address', ''), amount=rec.amount, account=pair[0],
+            staked=staked, token_id=token_id, near_tip=near_tip)
 
 
 # ---------------------------------------------------------------------------
@@ -1178,6 +1241,24 @@ def create_new_blsct_wallet(*, path, config, password=None, encrypt_file=True,
     return _create_blsct_wallet(os.urandom(32).hex(), path=path, config=config,
                                 password=password, encrypt_file=encrypt_file,
                                 creation_height=creation_height or 0)
+
+
+def estimate_height_for_date(date_str: str) -> int:
+    """Estimate the chain height at a 'YYYY-MM-DD' date, with a one-day
+    safety margin, for use as a scan starting point. Returns 0 on any
+    parse problem or pre-genesis date."""
+    from . import constants
+    import datetime
+    try:
+        d = datetime.datetime.strptime(date_str.strip(), '%Y-%m-%d')
+        ts = d.replace(tzinfo=datetime.timezone.utc).timestamp()
+    except Exception:
+        return 0
+    genesis_ts = constants.net.GENESIS_TIMESTAMP
+    if not genesis_ts or ts <= genesis_ts:
+        return 0
+    margin = 24 * 3600
+    return max(0, int((ts - genesis_ts - margin) // constants.net.BLOCK_INTERVAL))
 
 
 def is_blsct_view_key_str(text: str) -> bool:

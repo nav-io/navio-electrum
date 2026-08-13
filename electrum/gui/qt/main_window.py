@@ -296,10 +296,8 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
 
         self.contacts.fetch_openalias(self.config)
 
-        # note: the upstream update-check infrastructure (electrum.org
-        # version announcements and their signing keys) does not apply to
-        # Navio Electrum, so we neither prompt for nor run update checks.
-        # Releases are announced at https://github.com/nav-io/navio-electrum.
+        # the update check queries the latest GitHub release of
+        # nav-io/navio-electrum (see update_checker.py)
 
         self._update_check_thread = None
         if config.AUTOMATIC_CENTRALIZED_UPDATE_CHECKS:

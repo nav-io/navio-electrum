@@ -269,6 +269,33 @@ class QEAppController(BaseCrashReporter, QObject):
         it = jIntent.createChooser(sendIntent, cast('java.lang.CharSequence', jString(title)))
         jpythonActivity.startActivity(it)
 
+    updateAvailable = pyqtSignal([str], arguments=['version'])
+
+    @pyqtSlot()
+    def startUpdateCheck(self):
+        """Compare the running version against the latest GitHub release."""
+        if not self.config.AUTOMATIC_CENTRALIZED_UPDATE_CHECKS:
+            return
+        from electrum.util import make_aiohttp_session, get_asyncio_loop
+        from electrum.version import ELECTRUM_VERSION
+        from electrum._vendor.distutils.version import StrictVersion
+
+        async def check():
+            try:
+                async with make_aiohttp_session(proxy=None, timeout=60) as session:
+                    url = 'https://api.github.com/repos/nav-io/navio-electrum/releases/latest'
+                    async with session.get(url) as result:
+                        release = await result.json(content_type=None)
+                latest = release['tag_name'].lstrip('vV').strip()
+                if StrictVersion(latest) > StrictVersion(ELECTRUM_VERSION):
+                    self.logger.info(f'update available: {latest}')
+                    self.updateAvailable.emit(latest)
+            except Exception as e:
+                self.logger.info(f'update check failed: {e!r}')
+
+        import asyncio
+        asyncio.run_coroutine_threadsafe(check(), get_asyncio_loop())
+
     @pyqtSlot(result=str)
     def currentChainName(self):
         from electrum import constants

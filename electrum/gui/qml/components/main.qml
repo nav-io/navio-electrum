@@ -466,8 +466,18 @@ ApplicationWindow
         width: parent.width
     }
 
+    Connections {
+        target: AppController
+        function onUpdateAvailable(version) {
+            infobanner.show(qsTr('Navio Electrum %1 is available').arg(version), function() {
+                Qt.openUrlExternally('https://github.com/nav-io/navio-electrum/releases/latest')
+            })
+        }
+    }
+
     Component.onCompleted: {
         coverTimer.start()
+        AppController.startUpdateCheck()
 
         if (AppController.isAndroid()) {
             app.scanDialog = _scanDialog

@@ -71,6 +71,8 @@ class AbstractNet:
     ADDRTYPE_P2SH: int
     SEGWIT_HRP: str
     BLSCT_HRP: str = "nav"
+    GENESIS_TIMESTAMP: int = 0   # unix time of block 0; used to estimate a height from a date
+    BLOCK_INTERVAL: int = 120    # target seconds per block
     BOLT11_HRP: str
     GENESIS: str
     BLOCK_HEIGHT_FIRST_LIGHTNING_CHANNELS: int = 0
@@ -156,6 +158,7 @@ class BitcoinMainnet(AbstractNet):
     BLSCT_HRP = "nav"
     BOLT11_HRP = SEGWIT_HRP
     GENESIS = "0af3c23ae1ac4910693b7187ac61641d16d1cf49cba7acf8649d48e831d86b13"
+    GENESIS_TIMESTAMP = 1782910800
     DEFAULT_PORTS = {'t': '40001', 's': '40002'}
     BLOCK_HEIGHT_FIRST_LIGHTNING_CHANNELS = 497000
 
@@ -199,6 +202,7 @@ class BitcoinTestnet(AbstractNet):
     BLSCT_HRP = "tnv"
     BOLT11_HRP = SEGWIT_HRP
     GENESIS = "7a04d0211de9194390c69ea0ab0d67e3c18a00c5a0b4aae65a4b5cd919e5c3e6"
+    GENESIS_TIMESTAMP = 1777481682
     DEFAULT_PORTS = {'t': '51001', 's': '51002'}
 
     XPRV_HEADERS = {

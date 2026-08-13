@@ -728,6 +728,21 @@ class NewWalletWizard(KeystoreWizard):
         db.put('keystore', k.dump())
         db.put('wallet_type', 'blsct')
         db.set_keystore_encryption(bool(password))
+
+        # scan starting point: a brand-new wallet has no history before now,
+        # and restores can give a creation date to skip scanning older blocks
+        creation_height = 0
+        if data['wallet_type'] == 'blsct':
+            network = getattr(self._daemon, 'network', None)
+            if network:
+                creation_height = max(0, network.get_local_height() - 100)
+        elif data.get('creation_date'):
+            from .blsct_wallet import estimate_height_for_date
+            creation_height = estimate_height_for_date(data['creation_date'])
+        if creation_height:
+            # the synchronizer fast-forwards its scan pointer to
+            # creation_height - 1 (see BlsctSynchronizer.main)
+            db.put('blsct_sync', {'creation_height': creation_height})
         db.write()
         return
 

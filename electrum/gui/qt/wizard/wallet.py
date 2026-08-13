@@ -633,11 +633,24 @@ class WCBlsctHaveSeed(WalletWizardComponent):
         self.seed_widget.validChanged.connect(lambda valid: setattr(self, 'valid', valid))
         self.layout().addWidget(self.seed_widget)
 
+        date_row = QHBoxLayout()
+        date_row.addWidget(QLabel(_('Wallet creation date (optional)')))
+        self.creation_date_e = QLineEdit()
+        self.creation_date_e.setPlaceholderText('YYYY-MM-DD')
+        self.creation_date_e.setMaximumWidth(160)
+        date_row.addWidget(self.creation_date_e)
+        date_row.addStretch(1)
+        self.layout().addLayout(date_row)
+        self.layout().addWidget(WWLabel(_(
+            'Skips scanning blocks older than this date, making the restore '
+            'much faster. Leave empty to scan the whole chain.')))
+
     def apply(self):
         self.wizard_data['seed'] = ' '.join(self.seed_widget.get_seed_words())
         self.wizard_data['seed_type'] = 'blsct'
         self.wizard_data['seed_extend'] = False
         self.wizard_data['seed_variant'] = 'bip39'
+        self.wizard_data['creation_date'] = self.creation_date_e.text().strip()
 
 
 class WCBlsctHaveViewKey(WalletWizardComponent):
@@ -655,6 +668,14 @@ class WCBlsctHaveViewKey(WalletWizardComponent):
         note = WWLabel(_('A watch-only wallet sees incoming coins, balances and'
                          ' history, but cannot spend or stake.'))
         self.layout().addWidget(note)
+        date_row = QHBoxLayout()
+        date_row.addWidget(QLabel(_('Wallet creation date (optional)')))
+        self.creation_date_e = QLineEdit()
+        self.creation_date_e.setPlaceholderText('YYYY-MM-DD')
+        self.creation_date_e.setMaximumWidth(160)
+        date_row.addWidget(self.creation_date_e)
+        date_row.addStretch(1)
+        self.layout().addLayout(date_row)
         self.layout().addStretch(1)
 
     def _on_text_changed(self):
@@ -666,6 +687,7 @@ class WCBlsctHaveViewKey(WalletWizardComponent):
         self.wizard_data['seed_type'] = 'blsct'
         self.wizard_data['seed_extend'] = False
         self.wizard_data['seed_variant'] = 'bip39'
+        self.wizard_data['creation_date'] = self.creation_date_e.text().strip()
 
 
 class WCEnterExt(WalletWizardComponent, Logger):

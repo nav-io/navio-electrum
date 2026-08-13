@@ -206,6 +206,18 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
             self.balanceChanged.emit()
 
     @qt_event_listener
+    def on_event_blsct_payment_received(self, wallet, address, amount):
+        if wallet == self.wallet:
+            self._logger.info(f'blsct payment received: {amount} sat')
+            try:
+                formatted = self.wallet.config.format_amount_and_units(amount)
+            except Exception:
+                formatted = str(amount)
+            self.userNotify.emit(self.wallet, _('Payment received') + ': ' + formatted)
+            self.historyModel.setDirty()
+            self.balanceChanged.emit()
+
+    @qt_event_listener
     def on_event_adb_tx_height_changed(self, adb, txid, old_height, new_height):
         if adb == self.wallet.adb:
             self._logger.info(f'tx_height_changed {txid}. {old_height} -> {new_height}')
@@ -292,6 +304,16 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
 
     def update_sync_progress(self):
         if self.wallet.network and self.wallet.network.is_connected():
+            if self.wallet.wallet_type == 'blsct':
+                cur = max(0, self.wallet.blsct_sync.get('last_height', 0))
+                tip = self.wallet.network.get_local_height()
+                if tip > 0:
+                    pct = min(100, 100 * cur // tip)
+                    self.synchronizingProgress = \
+                        ("{} {}% ({}/{})".format(_("Scanning blocks..."), pct, cur, tip))
+                else:
+                    self.synchronizingProgress = _("Synchronizing...")
+                return
             num_sent, num_answered = self.wallet.adb.get_history_sync_state_details()
             self.synchronizingProgress = \
                 ("{} ({}/{})".format(_("Synchronizing..."), num_answered, num_sent))
