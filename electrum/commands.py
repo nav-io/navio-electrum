@@ -633,6 +633,7 @@ class Commands(Logger):
         arg:str:token_id:Token id (hex, as shown by listtokens)
         arg:str:destination:Navio (nav1...) address
         arg:int:amount:Token units to send
+        arg:str:memo:Optional encrypted memo attached to the payment
         """
         built = wallet.create_token_transaction(
             token_id, [(destination, int(amount), memo or '')], password=password)
