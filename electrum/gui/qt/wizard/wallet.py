@@ -102,8 +102,10 @@ class QENewWalletWizard(NewWalletWizard, QEAbstractWizard, MessageBoxMixin):
             'hw_unlock': {'gui': WCChooseHWDevice},
             'wallet_type': {'gui': WCWalletType},
             'blsct_create_seed': {'gui': WCBlsctCreateSeed},
+            'blsct_create_ext': {'gui': WCBlsctSeedExt},
             'blsct_confirm_seed': {'gui': WCBlsctConfirmSeed},
             'blsct_have_seed': {'gui': WCBlsctHaveSeed},
+            'blsct_have_ext': {'gui': WCBlsctSeedExt},
             'blsct_have_viewkey': {'gui': WCBlsctHaveViewKey},
             'keystore_type': {'gui': WCKeystoreType},
             'create_seed': {'gui': WCCreateSeed},
@@ -688,6 +690,41 @@ class WCBlsctHaveViewKey(WalletWizardComponent):
         self.wizard_data['seed_extend'] = False
         self.wizard_data['seed_variant'] = 'bip39'
         self.wizard_data['creation_date'] = self.creation_date_e.text().strip()
+
+
+class WCBlsctSeedExt(WalletWizardComponent):
+    """Optional BIP39 passphrase ('seed extension') for BLSCT wallets;
+    compatible with navio-core's mnemonic passphrase."""
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(self, parent, wizard, title=_('Seed Extension'))
+        self.layout().addWidget(WWLabel('\n'.join([
+            _('You may extend your seed with a custom passphrase (BIP39).'),
+            _('It must be saved together with your seed; without it the seed '
+              'restores a different, empty wallet.'),
+            _('Note that this is NOT your encryption password.'),
+            _('If you do not know what this is, leave it disabled.'),
+        ])))
+        self.cb = QCheckBox(_('Extend this seed with a passphrase'))
+        self.layout().addWidget(self.cb)
+        self.ext_e = QLineEdit()
+        self.ext_e.setEnabled(False)
+        self.layout().addWidget(self.ext_e)
+        self.layout().addStretch(1)
+
+        def on_toggle(checked):
+            self.ext_e.setEnabled(checked)
+            self._update_valid()
+        self.cb.toggled.connect(on_toggle)
+        self.ext_e.textEdited.connect(self._update_valid)
+        self._valid = True
+
+    def _update_valid(self, *_args):
+        self.valid = (not self.cb.isChecked()) or bool(self.ext_e.text())
+
+    def apply(self):
+        extend = self.cb.isChecked() and bool(self.ext_e.text())
+        self.wizard_data['seed_extend'] = extend
+        self.wizard_data['seed_extra_words'] = self.ext_e.text() if extend else ''
 
 
 class WCEnterExt(WalletWizardComponent, Logger):

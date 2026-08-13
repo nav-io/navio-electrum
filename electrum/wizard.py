@@ -414,6 +414,11 @@ class NewWalletWizard(KeystoreWizard):
                 'next': self.on_wallet_type
             },
             'blsct_create_seed': {
+                'next': 'blsct_create_ext',
+            },
+            'blsct_create_ext': {
+                # optional BIP39 passphrase ("seed extension"); compatible
+                # with navio-core's mnemonic passphrase
                 'next': 'blsct_confirm_seed',
             },
             'blsct_confirm_seed': {
@@ -421,6 +426,9 @@ class NewWalletWizard(KeystoreWizard):
                 'last': lambda d: self.is_single_password(),
             },
             'blsct_have_seed': {
+                'next': 'blsct_have_ext',
+            },
+            'blsct_have_ext': {
                 'next': 'wallet_password',
                 'last': lambda d: self.is_single_password(),
             },
@@ -710,13 +718,14 @@ class NewWalletWizard(KeystoreWizard):
             raise UserFacingException(e)
         from .blsct_wallet import is_blsct_view_key_str
         seed_text = ' '.join(data['seed'].split())
+        passphrase = data.get('seed_extra_words', '') if data.get('seed_extend') else ''
         if is_blsct_view_key_str(seed_text):
             vk, sp = seed_text.lower().split(':')
             k = BlsctKeyStore.from_view_key(vk, sp)
         elif len(seed_text) == 64 and all(c in '0123456789abcdefABCDEF' for c in seed_text):
-            k = BlsctKeyStore.from_seed_hex(seed_text.lower())
+            k = BlsctKeyStore.from_seed_hex(seed_text.lower(), passphrase=passphrase)
         else:
-            k = BlsctKeyStore.from_mnemonic(seed_text)
+            k = BlsctKeyStore.from_mnemonic(seed_text, passphrase=passphrase)
         password = data.get('password') or None
         if k.is_watching_only():
             password = None  # nothing secret to protect; view key must stay cleartext

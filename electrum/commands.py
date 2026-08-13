@@ -298,12 +298,13 @@ class Commands(Logger):
         return await self.daemon._stop_wallet(wallet_path)
 
     @command('')
-    async def create(self, password=None, encrypt_file=True, wallet_path=None, creation_height=None):
+    async def create(self, password=None, encrypt_file=True, wallet_path=None, creation_height=None, seed_passphrase=None):
         """Create a new Navio BLSCT wallet.
         If you want to be prompted for an argument, type '?' or ':' (concealed)
 
         arg:bool:encrypt_file:Whether the file on disk should be encrypted with the provided password
         arg:int:creation_height:Block height to start scanning from (default: 0)
+        arg:str:seed_passphrase:Optional BIP39 passphrase extending the seed (navio-core compatible)
         """
         from .blsct_wallet import create_new_blsct_wallet
         d = create_new_blsct_wallet(
@@ -311,6 +312,7 @@ class Commands(Logger):
             password=password,
             encrypt_file=encrypt_file,
             creation_height=creation_height,
+            passphrase=seed_passphrase or '',
             config=self.config)
         return {
             'seed': d['seed'],
@@ -319,7 +321,7 @@ class Commands(Logger):
         }
 
     @command('')
-    async def restore(self, text, password=None, encrypt_file=True, wallet_path=None, creation_height=0):
+    async def restore(self, text, password=None, encrypt_file=True, wallet_path=None, creation_height=0, seed_passphrase=None):
         """Restore a Navio BLSCT wallet from a 24-word seed phrase, a
         64-char hex seed, or a view key string ('viewkey:spendpub', as shown
         by getviewkey) for a watch-only wallet.
@@ -328,6 +330,7 @@ class Commands(Logger):
         arg:str:text:24-word seed phrase, hex seed, or view key string
         arg:bool:encrypt_file:Whether the file on disk should be encrypted with the provided password
         arg:int:creation_height:Block height to start scanning from (0 = full rescan)
+        arg:str:seed_passphrase:Optional BIP39 passphrase the seed was extended with (navio-core compatible)
         """
         from .blsct_wallet import restore_blsct_wallet_from_text
         d = restore_blsct_wallet_from_text(
@@ -336,6 +339,7 @@ class Commands(Logger):
             password=password,
             encrypt_file=encrypt_file,
             creation_height=creation_height,
+            passphrase=seed_passphrase or '',
             config=self.config)
         return {
             'path': d['wallet'].storage.get_path(),

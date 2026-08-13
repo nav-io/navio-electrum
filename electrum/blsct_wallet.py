@@ -56,6 +56,7 @@ class BlsctKeyStore(KeyStore):
         KeyStore.__init__(self)
         self.seed = d.get('seed')                    # hex str; possibly encrypted
         self.mnemonic = d.get('mnemonic')            # str; possibly encrypted
+        self.passphrase = d.get('passphrase') or ''  # BIP39 passphrase; possibly encrypted
         self.view_key_hex = d.get('view_key')        # cleartext (needed to scan)
         self.spend_pub_hex = d.get('spend_pub')      # cleartext (needed to scan)
         self.pw_hash_version = d.get('pw_hash_version', 1)
@@ -66,6 +67,7 @@ class BlsctKeyStore(KeyStore):
             'type': self.type,
             'seed': self.seed,
             'mnemonic': self.mnemonic,
+            'passphrase': self.passphrase,
             'view_key': self.view_key_hex,
             'spend_pub': self.spend_pub_hex,
             'pw_hash_version': self.pw_hash_version,
@@ -95,13 +97,17 @@ class BlsctKeyStore(KeyStore):
             new_password = None
         seed = self.get_seed_hex(old_password)
         mnemonic = self.get_mnemonic(old_password)
+        passphrase = self.get_passphrase(old_password)
         if new_password:
             self.seed = pw_encode(seed, new_password, version=self.pw_hash_version)
             self.mnemonic = pw_encode(mnemonic, new_password, version=self.pw_hash_version)
+            self.passphrase = (pw_encode(passphrase, new_password, version=self.pw_hash_version)
+                               if passphrase else '')
             self._encrypted = True
         else:
             self.seed = seed
             self.mnemonic = mnemonic
+            self.passphrase = passphrase
             self._encrypted = False
 
     def get_seed_hex(self, password) -> str:
@@ -127,8 +133,14 @@ class BlsctKeyStore(KeyStore):
             raise util.InvalidPassword()
 
     def get_passphrase(self, password) -> str:
-        # BLSCT seeds have no BIP39 passphrase; the GUI seed view asks for it
-        return ''
+        if not self.passphrase:
+            return ''
+        if not self._encrypted:
+            return self.passphrase
+        try:
+            return pw_decode(self.passphrase, password, version=self.pw_hash_version)
+        except Exception:
+            raise util.InvalidPassword()
 
     # -- KeyStore abstract methods --------------------------------------------
 
@@ -171,20 +183,21 @@ class BlsctKeyStore(KeyStore):
         return None
 
     @classmethod
-    def from_seed_hex(cls, seed_hex: str) -> 'BlsctKeyStore':
-        ring = BlsctKeyRing(seed_hex)
+    def from_seed_hex(cls, seed_hex: str, passphrase: str = '') -> 'BlsctKeyStore':
+        ring = BlsctKeyRing(seed_hex, passphrase=passphrase or None)
         mnemonic = bip39_entropy_to_mnemonic(bytes.fromhex(seed_hex))
         return cls({
             'seed': seed_hex,
             'mnemonic': mnemonic,
+            'passphrase': passphrase or '',
             'view_key': ring.view_key.serialize(),
             'spend_pub': ring.spend_pub.serialize(),
         })
 
     @classmethod
-    def from_mnemonic(cls, mnemonic: str) -> 'BlsctKeyStore':
+    def from_mnemonic(cls, mnemonic: str, passphrase: str = '') -> 'BlsctKeyStore':
         entropy = bip39_mnemonic_to_entropy(mnemonic)
-        ks = cls.from_seed_hex(entropy.hex())
+        ks = cls.from_seed_hex(entropy.hex(), passphrase=passphrase)
         ks.mnemonic = ' '.join(mnemonic.split())
         return ks
 
@@ -263,7 +276,8 @@ class Blsct_Wallet(Abstract_Wallet):
             raise Exception('missing/invalid blsct keystore')
         self.keystore = BlsctKeyStore(d)
         if not self.keystore._encrypted and self.keystore.seed:
-            self.keyring = BlsctKeyRing(self.keystore.seed)
+            self.keyring = BlsctKeyRing(self.keystore.seed,
+                                        passphrase=self.keystore.passphrase or None)
         elif self.keystore.view_key_hex and self.keystore.spend_pub_hex:
             # encrypted keystore: scan with the cleartext view key; the full
             # (spending) ring is derived from the seed at signing time
@@ -966,7 +980,9 @@ class Blsct_Wallet(Abstract_Wallet):
         if self.keystore.has_password():
             self.keystore.check_password(password)
         if not keyring.can_spend():
-            keyring = BlsctKeyRing(self.keystore.get_seed_hex(password))
+            keyring = BlsctKeyRing(
+                self.keystore.get_seed_hex(password),
+                passphrase=self.keystore.get_passphrase(password) or None)
             keyring.subaddr_by_hashid = dict(self.keyring.subaddr_by_hashid)
         return keyring
 
@@ -1420,11 +1436,13 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
 # ---------------------------------------------------------------------------
 
 def create_new_blsct_wallet(*, path, config, password=None, encrypt_file=True,
-                            creation_height: Optional[int] = None) -> dict:
+                            creation_height: Optional[int] = None,
+                            passphrase: str = '') -> dict:
     import os
     return _create_blsct_wallet(os.urandom(32).hex(), path=path, config=config,
                                 password=password, encrypt_file=encrypt_file,
-                                creation_height=creation_height or 0)
+                                creation_height=creation_height or 0,
+                                passphrase=passphrase)
 
 
 def estimate_height_for_date(date_str: str) -> int:
@@ -1465,7 +1483,8 @@ def is_blsct_view_key_str(text: str) -> bool:
 
 def restore_blsct_wallet_from_text(text: str, *, path, config, password=None,
                                    encrypt_file=True,
-                                   creation_height: int = 0) -> dict:
+                                   creation_height: int = 0,
+                                   passphrase: str = '') -> dict:
     text = ' '.join(text.split())
     if is_blsct_view_key_str(text):
         vk, sp = text.lower().split(':')
@@ -1479,7 +1498,8 @@ def restore_blsct_wallet_from_text(text: str, *, path, config, password=None,
         seed_hex = bip39_mnemonic_to_entropy(text).hex()
     return _create_blsct_wallet(seed_hex, path=path, config=config,
                                 password=password, encrypt_file=encrypt_file,
-                                creation_height=creation_height)
+                                creation_height=creation_height,
+                                passphrase=passphrase)
 
 
 def _create_blsct_watch_wallet(view_key_hex, spend_pub_hex, *, path, config,
@@ -1506,7 +1526,7 @@ def _create_blsct_watch_wallet(view_key_hex, spend_pub_hex, *, path, config,
 
 
 def _create_blsct_wallet(seed_hex, *, path, config, password, encrypt_file,
-                         creation_height):
+                         creation_height, passphrase: str = ''):
     from .storage import WalletStorage, StorageEncryptionVersion
     from .wallet_db import WalletDB
     from .wallet import Wallet
@@ -1516,7 +1536,7 @@ def _create_blsct_wallet(seed_hex, *, path, config, password, encrypt_file,
     if encrypt_file and password:
         storage.set_password(password, StorageEncryptionVersion.USER_PASSWORD)
     db = WalletDB('', storage=storage, upgrade=True)
-    ks = BlsctKeyStore.from_seed_hex(seed_hex)
+    ks = BlsctKeyStore.from_seed_hex(seed_hex, passphrase=passphrase or '')
     if password:
         ks.update_password(None, password)
     db.put('keystore', ks.dump())

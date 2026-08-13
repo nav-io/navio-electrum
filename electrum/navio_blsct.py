@@ -142,6 +142,15 @@ def bip39_mnemonic_to_entropy(mnemonic: str) -> bytes:
         raise ValueError('invalid mnemonic checksum')
     return entropy
 
+def bip39_mnemonic_to_seed(mnemonic: str, passphrase: str = '') -> bytes:
+    """BIP-39 seed: PBKDF2-HMAC-SHA512(sentence, 'mnemonic'+passphrase, 2048),
+    64 bytes. Whitespace-normalized like navio-core's MnemonicToSeed."""
+    sentence = ' '.join(mnemonic.split())
+    return hashlib.pbkdf2_hmac(
+        'sha512', sentence.encode('utf-8'),
+        b'mnemonic' + (passphrase or '').encode('utf-8'), 2048)
+
+
 def is_bip39_mnemonic(text: str) -> bool:
     try:
         bip39_mnemonic_to_entropy(text)
@@ -351,15 +360,23 @@ class BlsctKeyRing:
     """
 
     def __init__(self, seed_hex: Optional[str], *, view_key_hex: str = None,
-                 spend_pub_hex: str = None):
+                 spend_pub_hex: str = None, passphrase: str = None):
         b = get_blsct()
         self.b = b
         self.seed = None
         self.spend_key = None
         if seed_hex is not None:
-            # navio-core derives the BLS master key from the BIP39 entropy via
-            # EIP-2333 (derive_master_SK) before FromSeedToChildKey; match that
-            master_hex = derive_master_sk(bytes.fromhex(seed_hex)).hex()
+            # navio-core key derivation (KeyMan::SetupMnemonicFromEntropy):
+            # - no passphrase: BLS master key from the 32-byte BIP39 entropy
+            #   via EIP-2333 (derive_master_SK)
+            # - with passphrase: stretch mnemonic+passphrase into the 64-byte
+            #   BIP-39 seed first, then EIP-2333
+            if passphrase:
+                words = bip39_entropy_to_mnemonic(bytes.fromhex(seed_hex))
+                ikm = bip39_mnemonic_to_seed(words, passphrase)
+            else:
+                ikm = bytes.fromhex(seed_hex)
+            master_hex = derive_master_sk(ikm).hex()
             self.seed = b.Scalar.deserialize(master_hex)
             child = b.ChildKey(self.seed)
             self.master_blinding_key = child.to_blinding_key()
