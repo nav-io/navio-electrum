@@ -1,3 +1,34 @@
+# Release 4.8.6 - (August 13, 2026)
+ * Wallet (BLSCT):
+    - new: BIP39 passphrase ("seed extension") support, compatible with
+      navio-core: empty passphrase keeps the legacy entropy->EIP-2333
+      derivation, a passphrase stretches the mnemonic via PBKDF2-HMAC-SHA512
+      into the 64-byte BIP-39 seed first. Available in both wizards and via
+      --seed_passphrase on the CLI.
+    - new: full token and NFT support: balances, send/receive, and
+      create/mint via the wallet's seed-derived token key. Tokens page on
+      Android, Tokens dialog on desktop, CLI commands listtokens, sendtoken,
+      createtoken, minttoken, mintnft.
+    - fix: token outputs were never recovered (signed/unsigned subid
+      encoding bug in the output recovery path)
+    - fix: seed display after wallet creation showed an empty seed
+    - new: receive requests now detect payment and confirmations; Android
+      shows a "Payment received" notification
+    - new: restores accept a wallet creation date and skip scanning older
+      blocks; new wallets start scanning at the current tip
+    - new: BLSCT sync shows scan progress (percent and heights)
+    - new: staking pages show total rewards earned
+ * General:
+    - fix: fiat rates now price Navio (CoinGecko nav-coin) instead of BTC
+    - new: update check against the latest GitHub release (on by default)
+    - new: view keys can be imported by QR scan or paste
+ * Wizard UX:
+    - new: seed can be copied/shared at creation; seed entry supports paste
+      on Android; seed confirmation can be skipped
+ * Previously released in 4.8.4/4.8.5 and included here: watch-only wallets
+   (view keys), network selection at wallet creation and in preferences,
+   Lightning UI removal, QR-scanner crash fix.
+
 # Release 4.8.0 - Artisanal Handwritten Code (July 2, 2026)
  * Security fixes and disclosures:
     - (sev-low) SPV verification: fix CVE-2012-2459: reject left-sibling duplicates (#10568)
