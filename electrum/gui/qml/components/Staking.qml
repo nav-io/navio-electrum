@@ -38,6 +38,24 @@ Pane {
         }
     }
 
+    AirgapRequest {
+        id: airgapRequest
+        wallet: Daemon.currentWallet
+        onProposalError: (message) => {
+            var dialog = app.messageDialog.createObject(app, {
+                title: qsTr('Error'),
+                iconSource: Qt.resolvedUrl('../../icons/warning.png'),
+                text: message
+            })
+            dialog.open()
+        }
+    }
+
+    Component {
+        id: airgapSignDialog
+        AirgapSignDialog {}
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -283,7 +301,17 @@ Pane {
                     icon.source: '../../icons/confirmed.png'
                     enabled: stakeAmount.textAsSats && stakeAmount.textAsSats.satsInt > 0
                     onClicked: {
-                        staking.stake(stakeAmount.textAsSats, stakeDelegateKey.text, stakeRewardAddress.text)
+                        if (Daemon.currentWallet.isWatchOnly) {
+                            airgapRequest.makeStakeProposal(stakeAmount.textAsSats,
+                                stakeDelegateKey.text, stakeRewardAddress.text)
+                            var d = airgapSignDialog.createObject(root, {
+                                request: airgapRequest,
+                                subtitle: qsTr('Stake %1').arg(Config.formatSats(stakeAmount.textAsSats, true))
+                            })
+                            d.open()
+                        } else {
+                            staking.stake(stakeAmount.textAsSats, stakeDelegateKey.text, stakeRewardAddress.text)
+                        }
                         _stakeDialog.close()
                     }
                 }
@@ -371,9 +399,17 @@ Pane {
                     enabled: unstakeGroup.currentIndex >= 0
                     onClicked: {
                         var key = staking.unstakeGroups[unstakeGroup.currentIndex].key
-                        staking.unstake(
-                            unstakeAmount.textAsSats ? unstakeAmount.textAsSats : Config.unitsToSats(''),
-                            key)
+                        var amt = unstakeAmount.textAsSats ? unstakeAmount.textAsSats : Config.unitsToSats('')
+                        if (Daemon.currentWallet.isWatchOnly) {
+                            airgapRequest.makeUnstakeProposal(amt, key)
+                            var d = airgapSignDialog.createObject(root, {
+                                request: airgapRequest,
+                                subtitle: qsTr('Unstake')
+                            })
+                            d.open()
+                        } else {
+                            staking.unstake(amt, key)
+                        }
                         _unstakeDialog.close()
                     }
                 }

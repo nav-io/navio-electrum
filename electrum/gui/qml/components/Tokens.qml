@@ -38,6 +38,24 @@ Pane {
         }
     }
 
+    AirgapRequest {
+        id: airgapRequest
+        wallet: Daemon.currentWallet
+        onProposalError: (message) => {
+            var dialog = app.messageDialog.createObject(app, {
+                title: qsTr('Error'),
+                iconSource: Qt.resolvedUrl('../../icons/warning.png'),
+                text: message
+            })
+            dialog.open()
+        }
+    }
+
+    Component {
+        id: airgapSignDialog
+        AirgapSignDialog {}
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -98,7 +116,6 @@ Pane {
                             }
                             FlatButton {
                                 Layout.fillWidth: true
-                                visible: !Daemon.currentWallet.isWatchOnly
                                 text: qsTr('Send')
                                 icon.source: '../../icons/tab_send.png'
                                 enabled: !tokens.busy
@@ -162,7 +179,6 @@ Pane {
                             }
                             FlatButton {
                                 Layout.fillWidth: true
-                                visible: !Daemon.currentWallet.isWatchOnly
                                 text: qsTr('Send')
                                 icon.source: '../../icons/tab_send.png'
                                 enabled: !tokens.busy
@@ -275,8 +291,19 @@ Pane {
                         && (_sendTokenDialog.isNft || parseInt(sendAmount.text) > 0)
                     onClicked: {
                         var amount = _sendTokenDialog.isNft ? '1' : sendAmount.text
-                        tokens.sendToken(_sendTokenDialog.tokenId,
-                                         sendAddress.text.trim(), amount, '')
+                        if (Daemon.currentWallet.isWatchOnly) {
+                            airgapRequest.makeTokenSendProposal(
+                                _sendTokenDialog.tokenId,
+                                sendAddress.text.trim(), amount, '')
+                            var d = airgapSignDialog.createObject(root, {
+                                request: airgapRequest,
+                                subtitle: qsTr('Send %1 %2').arg(amount).arg(_sendTokenDialog.tokenName)
+                            })
+                            d.open()
+                        } else {
+                            tokens.sendToken(_sendTokenDialog.tokenId,
+                                             sendAddress.text.trim(), amount, '')
+                        }
                         _sendTokenDialog.close()
                     }
                 }

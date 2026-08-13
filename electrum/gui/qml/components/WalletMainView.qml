@@ -125,6 +125,21 @@ Item {
     }
 
     function payBlsct(invoicedialog, invoice) {
+        if (Daemon.currentWallet.isWatchOnly) {
+            var amount = invoice.amountOverride.isEmpty
+                ? invoice.amount
+                : invoice.amountOverride
+            airgapRequest.makeSendProposal(invoice.address, amount,
+                                           invoice.message, amount.isMax)
+            var agdialog = airgapSignDialog.createObject(mainView, {
+                request: airgapRequest,
+                subtitle: qsTr('Sending %1 to %2').arg(
+                    amount.isMax ? qsTr('all funds') : Config.formatSats(amount, true)
+                ).arg(invoice.address)
+            })
+            agdialog.open()
+            return
+        }
         var dialog = blsctConfirmPaymentDialog.createObject(mainView, {
                 address: invoice.address,
                 satoshis: invoice.amountOverride.isEmpty
@@ -214,7 +229,7 @@ Item {
             }
         }
         MenuItem {
-            visible: Daemon.currentWallet.walletType == 'blsct' && !Daemon.currentWallet.isWatchOnly
+            visible: Daemon.currentWallet.walletType == 'blsct'
             height: visible ? implicitHeight : 0
             icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor
             icon.source: '../../icons/tab_coins.png'
@@ -234,6 +249,18 @@ Item {
                 text: qsTr('Tokens')
                 enabled: app.stack.currentItem.objectName != 'Tokens'
                 onTriggered: menu.openPage(Qt.resolvedUrl('Tokens.qml'))
+            }
+        }
+
+        MenuItem {
+            visible: Daemon.currentWallet.walletType == 'blsct' && !Daemon.currentWallet.isWatchOnly
+            height: visible ? implicitHeight : 0
+            icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor
+            icon.source: '../../icons/qrcode_white.png'
+            action: Action {
+                text: qsTr('Air-gapped signer')
+                enabled: app.stack.currentItem.objectName != 'AirgapSignerPage'
+                onTriggered: menu.openPage(Qt.resolvedUrl('AirgapSignerPage.qml'))
             }
         }
 
@@ -622,6 +649,24 @@ Item {
             // it long enough for the finalizer to finish..
             // onClosed: destroy()
         }
+    }
+
+    AirgapRequest {
+        id: airgapRequest
+        wallet: Daemon.currentWallet
+        onProposalError: (message) => {
+            var dialog = app.messageDialog.createObject(mainView, {
+                title: qsTr('Error'),
+                iconSource: Qt.resolvedUrl('../../icons/warning.png'),
+                text: message
+            })
+            dialog.open()
+        }
+    }
+
+    Component {
+        id: airgapSignDialog
+        AirgapSignDialog {}
     }
 
     Component {

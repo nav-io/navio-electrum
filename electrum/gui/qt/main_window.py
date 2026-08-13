@@ -791,10 +791,12 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         self.labels_menu.addAction(_("&Export"), self.do_export_labels)
 
         if self.wallet.wallet_type == 'blsct':
-            if not self.wallet.is_watching_only():
-                self.wallet_menu.addAction(_("Sta&king"), self.show_staking_dialog)
+            self.wallet_menu.addAction(_("Sta&king"), self.show_staking_dialog)
             self.wallet_menu.addAction(_("&Tokens"), self.show_tokens_dialog)
             self.wallet_menu.addAction(_("&View key"), self.show_view_key_dialog)
+            if not self.wallet.is_watching_only():
+                self.wallet_menu.addAction(
+                    _("Air-&gapped signer"), self.show_airgap_signer_dialog)
 
         self.wallet_menu.addAction(_("Find"), self.toggle_search).setShortcut(QKeySequence("Ctrl+F"))
         self.wallet_menu.addSeparator()
@@ -2041,6 +2043,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
     def show_tokens_dialog(self):
         from .tokens_dialog import TokensDialog
         TokensDialog(self).exec()
+
+    def show_airgap_signer_dialog(self):
+        from .airgap_dialogs import AirgapSignerDialog
+        AirgapSignerDialog(self).exec()
 
     def show_view_key_dialog(self):
         vk_str = self.wallet.get_view_key_str()

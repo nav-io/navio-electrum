@@ -37,10 +37,10 @@ class TokensDialog(WindowModalDialog):
         vbox.addWidget(self.tree)
 
         buttons = QHBoxLayout()
+        b = QPushButton(_('Send...'))
+        b.clicked.connect(self._send_dialog)
+        buttons.addWidget(b)
         if not self.wallet.is_watching_only():
-            b = QPushButton(_('Send...'))
-            b.clicked.connect(self._send_dialog)
-            buttons.addWidget(b)
             b = QPushButton(_('Create token...'))
             b.clicked.connect(self._create_dialog)
             buttons.addWidget(b)
@@ -150,6 +150,18 @@ class TokensDialog(WindowModalDialog):
             self.window.show_error(_('Invalid amount'))
             return
         dest = addr_e.text().strip()
+
+        if self.wallet.is_watching_only():
+            from .airgap_dialogs import AirgapSignDialog
+            try:
+                proposal = self.wallet.make_token_send_proposal(
+                    tid, [(dest, amount, '')])
+            except UserFacingException as e:
+                self.window.show_error(str(e))
+                return
+            AirgapSignDialog(self.window, proposal, _('Send tokens')).exec()
+            self.update_list()
+            return
 
         self._broadcast(
             lambda password: self.wallet.create_token_transaction(

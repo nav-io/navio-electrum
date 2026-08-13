@@ -165,6 +165,19 @@ class StakingDialog(WindowModalDialog):
             self.window.show_error(_('A reward address requires an operator delegation key'))
             return
 
+        if self.wallet.is_watching_only():
+            from .airgap_dialogs import AirgapSignDialog
+            try:
+                proposal = self.wallet.make_stake_proposal(
+                    amount, delegate_key_hex=delegate_key,
+                    reward_address=reward_addr)
+            except UserFacingException as e:
+                self.window.show_error(str(e))
+                return
+            AirgapSignDialog(self.window, proposal, _('Stake')).exec()
+            self.update_list()
+            return
+
         def make_tx(password):
             return self.wallet.create_stake_transaction(
                 amount, password=password,
@@ -205,6 +218,18 @@ class StakingDialog(WindowModalDialog):
             return
         key = group_cb.currentData()
         amount = amount_e.get_amount() or None
+
+        if self.wallet.is_watching_only():
+            from .airgap_dialogs import AirgapSignDialog
+            try:
+                proposal = self.wallet.make_unstake_proposal(
+                    amount, delegate_key_hex=key or None)
+            except UserFacingException as e:
+                self.window.show_error(str(e))
+                return
+            AirgapSignDialog(self.window, proposal, _('Unstake')).exec()
+            self.update_list()
+            return
 
         def make_tx(password):
             return self.wallet.create_unstake_transaction(

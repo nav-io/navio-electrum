@@ -9,6 +9,7 @@ Item {
     id: scanner
 
     property bool active: false
+    property bool continuous: false
     property string url
     property string hint
 
@@ -153,10 +154,15 @@ Item {
             scanner.active = false
             scanner.foundText(qr.data)
         }
+        function onDataScanned(data) {
+            // continuous mode: report each decode, keep the camera running
+            scanner.foundText(data)
+        }
     }
 
     QRParser {
         id: qr
+        continuous: scanner.continuous
         videoSink: loader.item.vo.videoSink
     }
 

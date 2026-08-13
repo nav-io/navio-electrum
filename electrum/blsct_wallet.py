@@ -544,7 +544,13 @@ class Blsct_Wallet(Abstract_Wallet):
         """Send a token (or an NFT: amount 1 of an NFT token id).
         The fee is paid in NAV from the wallet's spendable coins.
         Returns navio_blsct.BuiltTx."""
+        utxos, recs, _fee = self._plan_token_send(token_id_hex, recipients)
         keyring = self._spending_keyring(password)
+        return navio_blsct.build_signed_tx(
+            keyring, utxos, recs, fixed_fee=fixed_fee)
+
+    def _plan_token_send(self, token_id_hex: str,
+                         recipients: Sequence[Tuple[str, int, str]]):
         total_out = sum(a for (_, a, _) in recipients)
         # token inputs
         token_coins = [u for u in self.get_token_utxos(token_id_hex)
@@ -576,8 +582,7 @@ class Blsct_Wallet(Abstract_Wallet):
                  + [self._coin_to_spendable(c) for c in n_selected])
         recs = [Recipient(addr, amount, memo or '', token_id_hex=token_id_hex)
                 for (addr, amount, memo) in recipients]
-        return navio_blsct.build_signed_tx(
-            keyring, utxos, recs, fixed_fee=fixed_fee)
+        return utxos, recs, est_fee(len(t_selected) + len(n_selected))
 
     def get_token_display_name(self, token_id_hex: str) -> str:
         names = self.db.get('blsct_token_names') or {}
@@ -1000,13 +1005,11 @@ class Blsct_Wallet(Abstract_Wallet):
             token_id_hex=d.get('token_id'),
         )
 
-    def create_blsct_transaction(self, recipients: Sequence[Tuple[str, int, str]],
-                                 password=None, fixed_fee: Optional[int] = None,
-                                 domain_coins: Optional[Sequence[str]] = None,
-                                 subtract_fee_from_amount: bool = False):
-        """recipients: [(nav1 address, amount_sats, memo)]
-        Returns navio_blsct.BuiltTx."""
-        keyring = self._spending_keyring(password)
+    def _plan_send(self, recipients: Sequence[Tuple[str, int, str]],
+                   domain_coins: Optional[Sequence[str]] = None,
+                   subtract_fee_from_amount: bool = False):
+        """Coin selection for a plain send; keyring-independent.
+        -> (utxos, recipients, est_fee)"""
         coins = self.get_spendable_coins()
         if domain_coins:
             coins = [c for c in coins if c.output_hash in domain_coins]
@@ -1024,8 +1027,21 @@ class Blsct_Wallet(Abstract_Wallet):
             if not (subtract_fee_from_amount and selected_amt >= total_out):
                 raise NotEnoughFunds()
         utxos = [self._coin_to_spendable(c) for c in selected]
+        recs = [r if isinstance(r, Recipient) else Recipient(r[0], r[1], r[2] or '')
+                for r in recipients]
+        return utxos, recs, est_fee(len(selected))
+
+    def create_blsct_transaction(self, recipients: Sequence[Tuple[str, int, str]],
+                                 password=None, fixed_fee: Optional[int] = None,
+                                 domain_coins: Optional[Sequence[str]] = None,
+                                 subtract_fee_from_amount: bool = False):
+        """recipients: [(nav1 address, amount_sats, memo)]
+        Returns navio_blsct.BuiltTx."""
+        keyring = self._spending_keyring(password)
+        utxos, recs, _fee = self._plan_send(
+            recipients, domain_coins, subtract_fee_from_amount)
         built = navio_blsct.build_signed_tx(
-            keyring, utxos, list(recipients),
+            keyring, utxos, recs,
             fixed_fee=fixed_fee,
             subtract_fee_from_amount=subtract_fee_from_amount)
         return built
@@ -1101,7 +1117,13 @@ class Blsct_Wallet(Abstract_Wallet):
         elif reward_address:
             raise UserFacingException('reward_address requires a delegate key')
 
+        utxos, recs, _fee = self._plan_stake(
+            amount, delegation=delegation, consolidate=consolidate)
         keyring = self._spending_keyring(password)
+        return navio_blsct.build_signed_tx(keyring, utxos, recs,
+                                           fixed_fee=fixed_fee)
+
+    def _plan_stake(self, amount: int, *, delegation, consolidate: bool = True):
         staked_inputs = []
         if consolidate:
             want_id = delegation.id() if delegation else ''
@@ -1133,8 +1155,26 @@ class Blsct_Wallet(Abstract_Wallet):
         stake_addr = self._next_staking_address()
         rec = Recipient(stake_addr, total_staked, '', 'StakedCommitment',
                         MIN_STAKE_AMOUNT, delegation)
-        return navio_blsct.build_signed_tx(keyring, utxos, [rec],
-                                           fixed_fee=fixed_fee)
+        return utxos, [rec], est_fee(len(selected) + len(staked_inputs))
+
+    def _parse_stake_delegation(self, delegate_key_hex, reward_address):
+        """Shared validation for stake/delegate params; -> DelegationRequest|None"""
+        if not delegate_key_hex:
+            if reward_address:
+                raise UserFacingException('reward_address requires a delegate key')
+            return None
+        if not navio_blsct.supports_data_predicate():
+            raise UserFacingException(
+                'stake delegation is not supported by the installed '
+                'navio-blsct bindings; please upgrade')
+        key_bytes = self._parse_delegate_key(delegate_key_hex)
+        if not reward_address:
+            reward_address = self.get_unused_address()
+        try:
+            navio_blsct.get_blsct().Address.decode(reward_address)
+        except Exception:
+            raise UserFacingException('invalid reward address')
+        return stake_delegation.DelegationRequest(key_bytes, reward_address)
 
     def create_unstake_transaction(self, amount: Optional[int] = None,
                                    password=None, *,
@@ -1196,6 +1236,162 @@ class Blsct_Wallet(Abstract_Wallet):
         utxos = [self._coin_to_spendable(u) for u in selected]
         return navio_blsct.build_signed_tx(keyring, utxos, recipients,
                                            fixed_fee=fixed_fee)
+
+    def _plan_unstake(self, amount: Optional[int] = None, *,
+                      delegate_key_hex: Optional[str] = None):
+        """Same selection logic as create_unstake_transaction, without the
+        keyring. -> (utxos, recipients, est_fee)"""
+        group = [u for u in self.get_staked_outputs() if u.d.get('height', 0) > 0]
+        if delegate_key_hex:
+            key = delegate_key_hex.lower()
+            group = [u for u in group
+                     if (u.d.get('delegation') or {}).get('delegate_key') == key]
+        else:
+            group = [u for u in group if not u.d.get('delegation')]
+        if not group:
+            raise UserFacingException('no matching staked outputs')
+        total_group = sum(u.d['amount'] for u in group)
+        if amount is None:
+            amount = total_group
+        if amount <= 0 or amount > total_group:
+            raise UserFacingException(
+                f'invalid unstake amount (staked in this group: {total_group} sats)')
+        group.sort(key=lambda u: -u.d['amount'])
+        selected = []
+        selected_amt = 0
+        for u in group:
+            if selected_amt >= amount:
+                break
+            selected.append(u)
+            selected_amt += u.d['amount']
+        remainder = selected_amt - amount
+        recipients = []
+        if remainder > 0:
+            if remainder < MIN_STAKE_AMOUNT:
+                raise UserFacingException(
+                    f'the remaining stake would fall below the minimum '
+                    f'({MIN_STAKE_AMOUNT} sats); unstake less or everything')
+            deleg = selected[0].d.get('delegation')
+            delegation = None
+            if deleg:
+                if not navio_blsct.supports_data_predicate():
+                    raise UserFacingException(
+                        'stake delegation is not supported by the installed '
+                        'navio-blsct bindings; please upgrade')
+                delegation = stake_delegation.DelegationRequest(
+                    bytes.fromhex(deleg['delegate_key']), deleg['reward_address'])
+            stake_addr = self._next_staking_address()
+            recipients.append(Recipient(stake_addr, remainder, '',
+                                        'StakedCommitment', MIN_STAKE_AMOUNT,
+                                        delegation))
+        utxos = [self._coin_to_spendable(u) for u in selected]
+        est_fee = (len(utxos) + len(recipients) + 3) * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        return utxos, recipients, est_fee
+
+    # ------------------------------------------------------------- air-gap
+
+    def _airgap_env(self) -> dict:
+        from . import constants
+        return {
+            'genesis_hex': constants.net.GENESIS,
+            'fingerprint_hex': self.get_fingerprint(),
+        }
+
+    def _proposal_from_plan(self, plan) -> dict:
+        from . import airgap
+        utxos, recipients, fee = plan
+        return airgap.make_proposal_payload(
+            **self._airgap_env(), utxos=utxos, recipients=recipients, fee=fee)
+
+    def make_send_proposal(self, recipients, *, domain_coins=None,
+                           subtract_fee_from_amount: bool = False) -> dict:
+        from . import airgap
+        utxos, recs, fee = self._plan_send(
+            recipients, domain_coins, subtract_fee_from_amount)
+        return airgap.make_proposal_payload(
+            **self._airgap_env(), utxos=utxos, recipients=recs, fee=fee,
+            subtract_fee_from_amount=subtract_fee_from_amount)
+
+    def make_stake_proposal(self, amount: int, *,
+                            delegate_key_hex: Optional[str] = None,
+                            reward_address: Optional[str] = None,
+                            consolidate: bool = True) -> dict:
+        if amount <= 0:
+            raise UserFacingException('amount must be positive')
+        delegation = self._parse_stake_delegation(delegate_key_hex, reward_address)
+        return self._proposal_from_plan(
+            self._plan_stake(amount, delegation=delegation, consolidate=consolidate))
+
+    def make_unstake_proposal(self, amount: Optional[int] = None, *,
+                              delegate_key_hex: Optional[str] = None) -> dict:
+        return self._proposal_from_plan(
+            self._plan_unstake(amount, delegate_key_hex=delegate_key_hex))
+
+    def make_token_send_proposal(self, token_id_hex: str, recipients) -> dict:
+        return self._proposal_from_plan(
+            self._plan_token_send(token_id_hex, recipients))
+
+    def check_airgap_proposal(self, payload: dict) -> dict:
+        """Offline-signer side: validate the envelope and structure and
+        return a display summary. Raises UserFacingException on mismatch."""
+        from . import airgap
+        airgap.check_envelope(payload, expected_type='prop', **self._airgap_env())
+        utxos, recipients, fee, subtract = airgap.proposal_to_plan(payload)
+        # classify each proposed output: does it pay this wallet?
+        own = set(self.get_addresses())
+        outputs = []
+        for r in recipients:
+            outputs.append({
+                'address': r.address,
+                'amount': r.amount,
+                'memo': r.memo,
+                'type': r.output_type,
+                'is_mine': r.address in own,
+                'token_id': r.token_id_hex or '',
+                'delegate_key': (r.delegation.delegate_key.hex()
+                                 if r.delegation else ''),
+                'reward_address': (r.delegation.reward_address
+                                   if r.delegation else ''),
+            })
+        return {
+            'outputs': outputs,
+            'fee': fee,
+            'subtract_fee_from_amount': subtract,
+            'total_in': sum(u.amount for u in utxos),
+            'num_inputs': len(utxos),
+            'age_seconds': airgap.proposal_age_seconds(payload),
+        }
+
+    def sign_airgap_proposal(self, payload: dict, password=None) -> dict:
+        """Offline-signer side: build and sign the transaction described by a
+        (checked) proposal; change is derived by this wallet's own builder.
+        Returns the reply payload."""
+        from . import airgap
+        airgap.check_envelope(payload, expected_type='prop', **self._airgap_env())
+        utxos, recipients, fee, subtract = airgap.proposal_to_plan(payload)
+        # make sure the keypool covers every referenced index
+        for u in utxos:
+            self.keyring.ensure_keypool(u.account, u.index + 1)
+        keyring = self._spending_keyring(password)
+        built = navio_blsct.build_signed_tx(
+            keyring, utxos, recipients, fixed_fee=fee,
+            subtract_fee_from_amount=subtract)
+        return airgap.make_reply_payload(
+            **self._airgap_env(), txid_hex=built.txid, raw_hex=built.raw_hex)
+
+    def check_airgap_reply(self, payload: dict) -> Tuple[str, str]:
+        """Online side: validate a signed reply; -> (txid_hex, raw_hex)."""
+        from . import airgap
+        airgap.check_envelope(payload, expected_type='signed', **self._airgap_env())
+        raw = payload.get('raw')
+        txid = payload.get('txid')
+        if not (isinstance(raw, bytes) and raw and isinstance(txid, bytes)
+                and len(txid) == 32):
+            raise UserFacingException(_('Malformed signed transaction payload'))
+        parsed = navio_blsct.parse_tx_hex(raw.hex())
+        if parsed.txid != txid.hex():
+            raise UserFacingException(_('Signed transaction id mismatch'))
+        return txid.hex(), raw.hex()
 
     async def broadcast_blsct_transaction(self, raw_hex: str) -> str:
         if not self.network or not self.network.interface:

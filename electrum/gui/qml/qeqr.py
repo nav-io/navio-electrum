@@ -29,6 +29,7 @@ class QEQRParser(QObject):
 
     busyChanged = pyqtSignal()
     dataChanged = pyqtSignal()
+    dataScanned = pyqtSignal([str], arguments=['data'])  # each decode (continuous mode)
     sizeChanged = pyqtSignal()
     videoSinkChanged = pyqtSignal()
     availableChanged = pyqtSignal()
@@ -39,6 +40,7 @@ class QEQRParser(QObject):
         self._busy = False
         self._data = None
         self._video_sink = None
+        self._continuous = False
 
         self._text = text
         # never raise from a QML-instantiated constructor: a failed creation
@@ -53,6 +55,17 @@ class QEQRParser(QObject):
     @pyqtProperty(bool, notify=availableChanged)
     def available(self):
         return self.qrreader is not None
+
+    continuousChanged = pyqtSignal()
+    @pyqtProperty(bool, notify=continuousChanged)
+    def continuous(self):
+        return self._continuous
+
+    @continuous.setter
+    def continuous(self, continuous):
+        if self._continuous != continuous:
+            self._continuous = continuous
+            self.continuousChanged.emit()
 
     @pyqtProperty(QVideoSink, notify=videoSinkChanged)
     def videoSink(self):
@@ -104,8 +117,12 @@ class QEQRParser(QObject):
 
         if len(self.qrreader_res) > 0:
             result = self.qrreader_res[0]
-            self._data = result
-            self.dataChanged.emit()
+            if self._continuous:
+                # keep scanning: the consumer collects each decode
+                self.dataScanned.emit(result)
+            else:
+                self._data = result
+                self.dataChanged.emit()
 
         self._busy = False
         self.busyChanged.emit()
