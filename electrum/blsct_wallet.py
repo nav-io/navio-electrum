@@ -974,8 +974,11 @@ class Blsct_Wallet(Abstract_Wallet):
         return (self.keystore.view_key_hex, self.keystore.spend_pub_hex)
 
     def get_view_key_str(self) -> str:
+        """navio-core compatible: 160 hex chars, view key (32 bytes)
+        followed by the public spending key (48 bytes). Can be passed
+        directly to navio-core's createwallet seed parameter."""
         vk, sp = self.get_view_key_pair()
-        return f'{vk}:{sp}'
+        return f'{vk}{sp}'
 
     def _spending_keyring(self, password) -> BlsctKeyRing:
         if self.is_watching_only():
@@ -1659,19 +1662,34 @@ def estimate_height_for_date(date_str: str) -> int:
     return max(0, int((ts - genesis_ts - margin) // constants.net.BLOCK_INTERVAL))
 
 
-def is_blsct_view_key_str(text: str) -> bool:
-    """'<view_key_hex(64)>:<spend_pub_hex(96)>' -- the watch-only import format."""
+def split_blsct_view_key_str(text: str):
+    """Accepts both view key formats and returns (view_key_hex, spend_pub_hex):
+    - navio-core / canonical: 160 hex chars, view key (32B) + spend pubkey (48B)
+    - legacy colon-separated: '<view_key_hex(64)>:<spend_pub_hex(96)>'
+    Returns None if the text is not a view key string."""
     text = text.strip()
-    parts = text.split(':')
-    if len(parts) != 2:
-        return False
-    vk, sp = parts
+    if ':' in text:
+        parts = text.split(':')
+        if len(parts) != 2:
+            return None
+        vk, sp = parts
+    elif len(text) == 160:
+        vk, sp = text[:64], text[64:]
+    else:
+        return None
     if len(vk) != 64 or len(sp) != 96:
-        return False
+        return None
     if not all(c in '0123456789abcdefABCDEF' for c in vk + sp):
+        return None
+    return vk.lower(), sp.lower()
+
+
+def is_blsct_view_key_str(text: str) -> bool:
+    parts = split_blsct_view_key_str(text)
+    if parts is None:
         return False
     try:
-        BlsctKeyRing.from_view_key(vk.lower(), sp.lower())
+        BlsctKeyRing.from_view_key(*parts)
         return True
     except Exception:
         return False
@@ -1683,7 +1701,7 @@ def restore_blsct_wallet_from_text(text: str, *, path, config, password=None,
                                    passphrase: str = '') -> dict:
     text = ' '.join(text.split())
     if is_blsct_view_key_str(text):
-        vk, sp = text.lower().split(':')
+        vk, sp = split_blsct_view_key_str(text)
         return _create_blsct_watch_wallet(vk, sp, path=path, config=config,
                                           password=password,
                                           encrypt_file=encrypt_file,

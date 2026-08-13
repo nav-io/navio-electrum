@@ -145,7 +145,8 @@ class QENewWalletWizard(NewWalletWizard, QEAbstractWizard):
             self.create_storage(path, data)
 
             # minimally populate self after create
-            self._password = data['password']
+            # (may be absent: watch-only wallets skip the password page)
+            self._password = data.get('password')
             self.path = path
 
             self.createSuccess.emit()
