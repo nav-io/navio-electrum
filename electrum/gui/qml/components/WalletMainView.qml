@@ -226,6 +226,18 @@ Item {
         }
 
         MenuItem {
+            visible: Daemon.currentWallet.walletType == 'blsct'
+            height: visible ? implicitHeight : 0
+            icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor
+            icon.source: '../../icons/tab_receive.png'
+            action: Action {
+                text: qsTr('Tokens')
+                enabled: app.stack.currentItem.objectName != 'Tokens'
+                onTriggered: menu.openPage(Qt.resolvedUrl('Tokens.qml'))
+            }
+        }
+
+        MenuItem {
             visible: Daemon.currentWallet.walletType != 'blsct'
             height: visible ? implicitHeight : 0
             icon.color: action.enabled ? 'transparent' : Material.iconDisabledColor

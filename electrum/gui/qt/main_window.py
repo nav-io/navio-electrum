@@ -793,6 +793,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
         if self.wallet.wallet_type == 'blsct':
             if not self.wallet.is_watching_only():
                 self.wallet_menu.addAction(_("Sta&king"), self.show_staking_dialog)
+            self.wallet_menu.addAction(_("&Tokens"), self.show_tokens_dialog)
             self.wallet_menu.addAction(_("&View key"), self.show_view_key_dialog)
 
         self.wallet_menu.addAction(_("Find"), self.toggle_search).setShortcut(QKeySequence("Ctrl+F"))
@@ -2036,6 +2037,10 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
     def show_staking_dialog(self):
         from .staking_dialog import StakingDialog
         StakingDialog(self).exec()
+
+    def show_tokens_dialog(self):
+        from .tokens_dialog import TokensDialog
+        TokensDialog(self).exec()
 
     def show_view_key_dialog(self):
         vk_str = self.wallet.get_view_key_str()

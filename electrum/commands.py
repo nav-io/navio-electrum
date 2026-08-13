@@ -607,6 +607,84 @@ class Commands(Logger):
             raise UserFacingException('view keys only exist for BLSCT wallets')
         return wallet.get_view_key_str()
 
+    @command('w')
+    async def listtokens(self, wallet: Abstract_Wallet = None):
+        """List token balances and NFTs held by the wallet."""
+        return {
+            'tokens': [
+                {'token_id': tid,
+                 'name': wallet.get_token_display_name(tid),
+                 'balance': balance}
+                for tid, balance in wallet.get_token_balances().items()
+            ],
+            'nfts': wallet.get_nfts(),
+        }
+
+    @command('wnp')
+    async def sendtoken(self, token_id, destination, amount, memo=None,
+                        password=None, wallet: Abstract_Wallet = None):
+        """Send tokens (or an NFT: pass its token_id and amount 1).
+        Broadcasts immediately.
+
+        arg:str:token_id:Token id (hex, as shown by listtokens)
+        arg:str:destination:Navio (nav1...) address
+        arg:int:amount:Token units to send
+        """
+        built = wallet.create_token_transaction(
+            token_id, [(destination, int(amount), memo or '')], password=password)
+        txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
+        return {'txid': txid, 'fee': built.fee}
+
+    @command('wnp')
+    async def createtoken(self, name, total_supply, is_nft=False, metadata=None,
+                          password=None, wallet: Abstract_Wallet = None):
+        """Create this wallet's token (or NFT collection with is_nft=1).
+        Each wallet controls exactly one token, derived from its seed.
+
+        arg:str:name:Token name (stored in the on-chain metadata)
+        arg:int:total_supply:Maximum supply
+        arg:bool:is_nft:Create an NFT collection instead of a fungible token
+        arg:str:metadata:Optional extra metadata as JSON object
+        """
+        meta = {'name': name}
+        if metadata:
+            meta.update(json.loads(metadata))
+        built = wallet.create_token(meta, int(total_supply), bool(is_nft),
+                                    password=password)
+        txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
+        return {'txid': txid, 'fee': built.fee}
+
+    @command('wnp')
+    async def minttoken(self, destination, amount, password=None,
+                        wallet: Abstract_Wallet = None):
+        """Mint units of this wallet's fungible token to an address.
+
+        arg:str:destination:Navio (nav1...) address
+        arg:int:amount:Token units to mint
+        """
+        built = wallet.mint_token(destination, int(amount), password=password)
+        txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
+        return {'txid': txid, 'fee': built.fee}
+
+    @command('wnp')
+    async def mintnft(self, destination, nft_id, name=None, metadata=None,
+                      password=None, wallet: Abstract_Wallet = None):
+        """Mint one NFT of this wallet's collection to an address.
+
+        arg:str:destination:Navio (nav1...) address
+        arg:int:nft_id:NFT number within the collection
+        arg:str:name:Optional NFT name (stored in the on-chain metadata)
+        arg:str:metadata:Optional extra metadata as JSON object
+        """
+        meta = {}
+        if name:
+            meta['name'] = name
+        if metadata:
+            meta.update(json.loads(metadata))
+        built = wallet.mint_nft(destination, int(nft_id), meta, password=password)
+        txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
+        return {'txid': txid, 'fee': built.fee}
+
     @command('wp')
     async def payto(self, destination, amount, fee=None, memo=None, from_coins=None,
                     password=None, wallet: Abstract_Wallet = None):

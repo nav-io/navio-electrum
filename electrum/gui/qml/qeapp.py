@@ -36,6 +36,7 @@ from .qefx import QEFX
 from .qetxfinalizer import QETxFinalizer, QETxRbfFeeBumper, QETxCpfpFeeBumper, QETxCanceller, QETxSweepFinalizer, FeeSlider
 from .qeblsctfinalizer import QEBlsctFinalizer
 from .qestaking import QEStaking
+from .qetokens import QETokens
 from .qeinvoice import QEInvoice, QEInvoiceParser
 from .qepiresolver import QEPIResolver
 from .qerequestdetails import QERequestDetails
@@ -538,6 +539,7 @@ class ElectrumQmlApplication(QGuiApplication):
         qmlRegisterType(QETxFinalizer, 'org.electrum', 1, 0, 'TxFinalizer')
         qmlRegisterType(QEBlsctFinalizer, 'org.electrum', 1, 0, 'BlsctFinalizer')
         qmlRegisterType(QEStaking, 'org.electrum', 1, 0, 'StakingBackend')
+        qmlRegisterType(QETokens, 'org.electrum', 1, 0, 'TokensBackend')
         qmlRegisterType(QEPIResolver, 'org.electrum', 1, 0, 'PIResolver')
         qmlRegisterType(QEInvoice, 'org.electrum', 1, 0, 'Invoice')
         qmlRegisterType(QEInvoiceParser, 'org.electrum', 1, 0, 'InvoiceParser')

@@ -470,6 +470,179 @@ class Blsct_Wallet(Abstract_Wallet):
         """Unspent staked commitments (confirmed and unconfirmed)."""
         return [u for u in self.get_utxos() if u.d.get('staked')]
 
+    # -------------------------------------------------------------- tokens
+
+    _NFT_NO_SUBID = 'ffffffffffffffff'  # subid of fungible outputs (-1 le)
+
+    @classmethod
+    def _is_nft_token_id(cls, token_id_hex: str) -> bool:
+        return len(token_id_hex) == 80 and token_id_hex[64:] != cls._NFT_NO_SUBID
+
+    def get_token_utxos(self, token_id_hex: Optional[str] = None):
+        """Unspent token outputs, optionally filtered to one token id."""
+        utxos = []
+        with self._blsct_lock:
+            for ohash, d in self.blsct_outputs.items():
+                if d.get('spent_by') or not d.get('token_id') or d.get('staked'):
+                    continue
+                if token_id_hex and d['token_id'] != token_id_hex:
+                    continue
+                utxos.append(BlsctUtxo(ohash, dict(d)))
+        return utxos
+
+    def get_token_balances(self) -> Dict[str, int]:
+        """{token_id_hex: amount} over unspent fungible token outputs."""
+        balances = {}  # type: Dict[str, int]
+        for u in self.get_token_utxos():
+            tid = u.d['token_id']
+            if self._is_nft_token_id(tid):
+                continue
+            balances[tid] = balances.get(tid, 0) + u.d['amount']
+        return balances
+
+    def get_nfts(self) -> List[dict]:
+        """Unspent NFT outputs (token outputs with a concrete subid)."""
+        nfts = []
+        for u in self.get_token_utxos():
+            tid = u.d['token_id']
+            if not self._is_nft_token_id(tid):
+                continue
+            nfts.append({
+                'token_id': tid,
+                'token': tid[:64],
+                'subid': int.from_bytes(bytes.fromhex(tid[64:]), 'little'),
+                'amount': u.d['amount'],
+                'output_hash': u.output_hash,
+                'height': u.d.get('height', 0),
+                'memo': u.d.get('memo', ''),
+            })
+        nfts.sort(key=lambda n: (n['token'], n['subid']))
+        return nfts
+
+    def create_token_transaction(self, token_id_hex: str,
+                                 recipients: Sequence[Tuple[str, int, str]],
+                                 password=None,
+                                 fixed_fee: Optional[int] = None):
+        """Send a token (or an NFT: amount 1 of an NFT token id).
+        The fee is paid in NAV from the wallet's spendable coins.
+        Returns navio_blsct.BuiltTx."""
+        keyring = self._spending_keyring(password)
+        total_out = sum(a for (_, a, _) in recipients)
+        # token inputs
+        token_coins = [u for u in self.get_token_utxos(token_id_hex)
+                       if u.d.get('height', 0) > 0]
+        token_coins.sort(key=lambda c: -c.d['amount'])
+        t_selected = []
+        t_amt = 0
+        for c in token_coins:
+            if t_amt >= total_out:
+                break
+            t_selected.append(c)
+            t_amt += c.d['amount']
+        if t_amt < total_out:
+            raise NotEnoughFunds()
+        # NAV inputs for the fee
+        nav_coins = self.get_spendable_coins()
+        nav_coins.sort(key=lambda c: -c.d['amount'])
+        est_fee = lambda n: (n + len(recipients) + 4) * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        n_selected = []
+        n_amt = 0
+        for c in nav_coins:
+            if n_amt >= est_fee(len(t_selected) + len(n_selected)):
+                break
+            n_selected.append(c)
+            n_amt += c.d['amount']
+        if n_amt < est_fee(len(t_selected) + len(n_selected)):
+            raise NotEnoughFunds()
+        utxos = ([self._coin_to_spendable(c) for c in t_selected]
+                 + [self._coin_to_spendable(c) for c in n_selected])
+        recs = [Recipient(addr, amount, memo or '', token_id_hex=token_id_hex)
+                for (addr, amount, memo) in recipients]
+        return navio_blsct.build_signed_tx(
+            keyring, utxos, recs, fixed_fee=fixed_fee)
+
+    def get_token_display_name(self, token_id_hex: str) -> str:
+        names = self.db.get('blsct_token_names') or {}
+        name = names.get(token_id_hex) or names.get(token_id_hex[:64])
+        return name or (token_id_hex[:16] + '...')
+
+    def _remember_token_name(self, token_id_hex: str, name: str):
+        names = self.db.get('blsct_token_names') or {}
+        if names.get(token_id_hex[:64]) != name:
+            names[token_id_hex[:64]] = name
+            self.db.put('blsct_token_names', names)
+
+    def create_token(self, metadata: Dict[str, str], total_supply: int,
+                     is_nft: bool = False, password=None):
+        """Create this wallet's token / NFT collection. One per wallet (the
+        token key is derived from the seed). Returns BuiltTx."""
+        keyring = self._spending_keyring(password)
+        coins = self.get_spendable_coins()
+        coins.sort(key=lambda c: -c.d['amount'])
+        est = 4 * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        selected, amt = [], 0
+        for c in coins:
+            if amt >= est:
+                break
+            selected.append(c)
+            amt += c.d['amount']
+        if amt < est:
+            raise NotEnoughFunds()
+        built = navio_blsct.build_create_token_tx(
+            keyring, [self._coin_to_spendable(c) for c in selected],
+            metadata, total_supply, is_nft)
+        self.db.put('blsct_token_meta', {
+            'metadata': dict(metadata or {}),
+            'total_supply': int(total_supply),
+            'is_nft': bool(is_nft),
+            'create_txid': built.txid,
+        })
+        return built
+
+    def _mint_common(self, build, password):
+        keyring = self._spending_keyring(password)
+        coins = self.get_spendable_coins()
+        coins.sort(key=lambda c: -c.d['amount'])
+        est = 4 * navio_blsct.DEFAULT_FEE_PER_COMPONENT
+        selected, amt = [], 0
+        for c in coins:
+            if amt >= est:
+                break
+            selected.append(c)
+            amt += c.d['amount']
+        if amt < est:
+            raise NotEnoughFunds()
+        built = build(keyring, [self._coin_to_spendable(c) for c in selected])
+        # learn our token id from the mint output and bind the stored metadata
+        try:
+            parsed = navio_blsct.parse_tx_hex(built.raw_hex)
+            for out in parsed.outputs:
+                if out.token_id and out.token_id != bytes(32):
+                    tid = (out.token_id.hex()
+                           + out.token_nft_id.to_bytes(8, 'little', signed=True).hex())
+                    meta = (self.db.get('blsct_token_meta') or {}).get('metadata') or {}
+                    if meta.get('name'):
+                        self._remember_token_name(tid, meta['name'])
+                    break
+        except Exception:
+            self.logger.exception('could not extract token id from mint tx')
+        return built
+
+    def mint_token(self, dest_address: str, amount: int, password=None):
+        """Mint units of this wallet's fungible token. Returns BuiltTx."""
+        return self._mint_common(
+            lambda keyring, utxos: navio_blsct.build_mint_token_tx(
+                keyring, utxos, dest_address, amount),
+            password)
+
+    def mint_nft(self, dest_address: str, nft_id: int,
+                 metadata: Dict[str, str], password=None):
+        """Mint one NFT of this wallet's collection. Returns BuiltTx."""
+        return self._mint_common(
+            lambda keyring, utxos: navio_blsct.build_mint_nft_tx(
+                keyring, utxos, dest_address, nft_id, metadata),
+            password)
+
     def get_staking_rewards_sat(self) -> int:
         """Total staking rewards ever received: outputs on the staking
         sub-account that are not staked commitments, plus outputs to any
@@ -499,6 +672,8 @@ class Blsct_Wallet(Abstract_Wallet):
         events = {}
         with self._blsct_lock:
             for ohash, d in self.blsct_outputs.items():
+                if d.get('token_id'):
+                    continue  # token amounts are not NAV; shown in the tokens view
                 rtx = d.get('tx_hash')
                 if rtx:
                     ev = events.setdefault(rtx, {'height': d.get('height', 0), 'delta': 0, 'memos': []})
@@ -802,6 +977,7 @@ class Blsct_Wallet(Abstract_Wallet):
             account=d['account'],
             index=d['addr_index'],
             staked_commitment=bool(d.get('staked')),
+            token_id_hex=d.get('token_id'),
         )
 
     def create_blsct_transaction(self, recipients: Sequence[Tuple[str, int, str]],
@@ -1211,8 +1387,12 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
         if rec is None:
             self.logger.info(f'output {output_hash} matched but did not recover')
             return
-        token_id = (parsed.token_id.hex()
-                    if (parsed.token_id and parsed.token_id != bytes(32)) else None)
+        # full TokenId serialization (token 32B + subid 8B le, signed subid:
+        # fungible outputs carry -1), matching TokenId.serialize()
+        token_id = None
+        if parsed.token_id and parsed.token_id != bytes(32):
+            token_id = (parsed.token_id.hex()
+                        + parsed.token_nft_id.to_bytes(8, 'little', signed=True).hex())
         staked, delegation = wallet._classify_output(parsed)
         wallet._store_output(output_hash,
                              tx_hash=tx_hash, height=height, amount=rec.amount,
