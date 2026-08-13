@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
                              QLineEdit, QGridLayout, QCheckBox)
 
 from electrum.i18n import _
-from electrum.util import UserFacingException
+from electrum.util import UserFacingException, NotEnoughFunds
 
 from .util import (WindowModalDialog, Buttons, OkButton, CancelButton,
                    WaitingDialog)
@@ -156,10 +156,10 @@ class TokensDialog(WindowModalDialog):
             try:
                 proposal = self.wallet.make_token_send_proposal(
                     tid, [(dest, amount, '')])
-            except UserFacingException as e:
+            except (UserFacingException, NotEnoughFunds) as e:
                 self.window.show_error(str(e))
                 return
-            AirgapSignDialog(self.window, proposal, _('Send tokens')).exec()
+            AirgapSignDialog(self.window, proposal, _('Send tokens'), parent=self).exec()
             self.update_list()
             return
 

@@ -8,8 +8,13 @@ import org.electrum 1.0
 Item {
     id: scanner
 
-    property bool active: false
+    // legacy consumers (SendDialog/ScanDialog) never touch `active` and rely
+    // on the start timer alone; airgap consumers bind it to their step state
+    property bool active: true
     property bool continuous: false
+    // set by the start timer; combined with `active` so consumers can keep
+    // declarative bindings on `active` (an imperative write would break them)
+    property bool _camReady: false
     property string url
     property string hint
 
@@ -23,6 +28,9 @@ Item {
 
     function start() {
         console.log('qrscan.start')
+        // legacy single-shot flow (stop() clears active; restart re-arms it).
+        // airgap consumers bind `active` and never call start()/stop().
+        scanner.active = true
         loader.item.startTimer.start()
     }
 
@@ -108,7 +116,7 @@ Item {
             Camera {
                 id: camera
                 cameraDevice: mediaDevices.defaultVideoInput
-                active: scanner.active
+                active: scanner.active && scanner._camReady
                 focusMode: Camera.FocusModeAutoNear
                 customFocusPoint: Qt.point(0.5, 0.5)
 
@@ -127,7 +135,7 @@ Item {
                 id: _startTimer
                 interval: 500
                 repeat: false
-                onTriggered: scanner.active = true
+                onTriggered: scanner._camReady = true
             }
 
         }

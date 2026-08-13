@@ -140,6 +140,34 @@ class TestAirgapFlow(ElectrumTestCase):
         with self.assertRaises(UserFacingException):
             full.check_airgap_proposal(dup)
 
+    def test_hostile_proposal_structures_rejected(self):
+        """A compromised online device knows the fingerprint, so payloads
+        passing the envelope check must still be structurally validated."""
+        full, watch = self._make_wallets()
+        dest = full.keyring.address(0, 5)
+        base = watch.make_send_proposal([(dest, 1_0000_0000, '')])
+        mutations = [
+            lambda p: p['ins'][0].__setitem__(5, 2**40),   # keypool DoS
+            lambda p: p['ins'][0].__setitem__(4, 'x'),
+            lambda p: p['ins'].__setitem__(0, p['ins'][0][:5]),
+            lambda p: p['ins'].__setitem__(0, 7),
+            lambda p: p['ins'][0].__setitem__(2, 7),
+            lambda p: p['outs'][0].__setitem__(5, 7),
+            lambda p: p['outs'][0].__setitem__(1, -5),
+            lambda p: p['outs'][0].__setitem__(2, 9),
+        ]
+        for mut in mutations:
+            p = copy.deepcopy(base)
+            mut(p)
+            with self.assertRaises(UserFacingException):
+                full.check_airgap_proposal(p)
+
+    def test_collector_inconsistent_totals(self):
+        c = FragmentCollector()
+        c.add('NAV-AG/1/abcd1234/1/3/AAAA')
+        c.add('NAV-AG/1/abcd1234/2/10/BBBB')
+        self.assertFalse(c.is_complete())
+
     def test_watch_wallet_cannot_sign(self):
         full, watch = self._make_wallets()
         dest = full.keyring.address(0, 5)

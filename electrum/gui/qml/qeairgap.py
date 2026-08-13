@@ -49,14 +49,19 @@ class QEAirgapRequest(QObject):
     def _set_proposal(self, make):
         try:
             payload = make()
-            self._fragments = airgap.payload_to_fragments(payload)
-        except UserFacingException as e:
-            self.proposalError.emit(str(e))
-            return
+            fragments = airgap.payload_to_fragments(payload)
         except Exception as e:
-            self._logger.exception('could not build proposal')
+            if not isinstance(e, UserFacingException):
+                self._logger.exception('could not build proposal')
+            # clear any previous proposal so a caller that opens the sign
+            # dialog anyway shows nothing signable instead of a stale one
+            self._fragments = []
+            self._collector = airgap.FragmentCollector()
+            self.fragmentsChanged.emit()
+            self.replyProgressChanged.emit()
             self.proposalError.emit(str(e) or repr(e))
             return
+        self._fragments = fragments
         self._collector = airgap.FragmentCollector()
         self.fragmentsChanged.emit()
         self.replyProgressChanged.emit()

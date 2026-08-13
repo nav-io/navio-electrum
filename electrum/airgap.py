@@ -51,6 +51,12 @@ FRAGMENT_PREFIX = 'NAV-AG'
 # base64 characters per QR fragment; keeps each QR comfortably scannable
 FRAGMENT_DATA_LEN = 280
 PROPOSAL_AGE_WARN_SECONDS = 24 * 3600
+MAX_FRAGMENTS = 4096                      # bounds collector memory
+MAX_PAYLOAD_SIZE = 4 * 1024 * 1024        # decompressed payload cap
+# sanity bounds for proposal input key indices (a hostile online device
+# could otherwise make the signer derive an absurd keypool)
+MAX_ACCOUNT = 2**31
+MAX_ADDR_INDEX = 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +208,10 @@ class FragmentCollector:
         if parsed is None:
             return False
         msgid, idx, total, chunk = parsed
-        if self.msgid != msgid:
-            # new (or first) message: reset
+        if total > MAX_FRAGMENTS:
+            return False
+        if self.msgid != msgid or self.total != total:
+            # new (or first) message, or inconsistent framing: reset
             self.msgid = msgid
             self.total = total
             self.chunks = {}
@@ -217,7 +225,8 @@ class FragmentCollector:
         return len(self.chunks)
 
     def is_complete(self) -> bool:
-        return self.total > 0 and len(self.chunks) == self.total
+        return (self.total > 0
+                and set(self.chunks.keys()) == set(range(1, self.total + 1)))
 
     def payload(self) -> dict:
         if not self.is_complete():
@@ -227,7 +236,11 @@ class FragmentCollector:
         raw = base64.urlsafe_b64decode(b64)
         if hashlib.sha256(raw).hexdigest()[:8] != self.msgid:
             raise ValueError('fragment checksum mismatch')
-        obj = cbor_decode(zlib.decompress(raw))
+        decompressor = zlib.decompressobj()
+        data = decompressor.decompress(raw, MAX_PAYLOAD_SIZE)
+        if decompressor.unconsumed_tail:
+            raise ValueError('payload too large')
+        obj = cbor_decode(data)
         if not isinstance(obj, dict):
             raise ValueError('unexpected payload type')
         return obj
@@ -322,33 +335,63 @@ def proposal_to_plan(payload: dict):
         raise UserFacingException(_('Proposal has no outputs'))
     if not isinstance(fee, int) or fee < 0:
         raise UserFacingException(_('Proposal has an invalid fee'))
+    def bad(what):
+        raise UserFacingException(_('Malformed proposal') + f' ({what})')
+
     utxos = []
     seen = set()
     for item in ins_raw:
+        if not (isinstance(item, list) and len(item) == 8):
+            bad('input arity')
         (ohash, amount, gamma, blind, account, index, staked, token) = item
         if not (isinstance(ohash, bytes) and len(ohash) == 32):
-            raise UserFacingException(_('Malformed proposal input'))
-        if not (isinstance(amount, int) and amount > 0):
-            raise UserFacingException(_('Malformed proposal input'))
+            bad('input hash')
+        if not (isinstance(amount, int) and 0 < amount < 2**63):
+            bad('input amount')
+        if not (isinstance(gamma, bytes) and len(gamma) == 32):
+            bad('input gamma')
+        if not (isinstance(blind, bytes) and len(blind) == 48):
+            bad('input blinding key')
+        if not (isinstance(account, int) and 0 <= account < MAX_ACCOUNT):
+            bad('input account')
+        if not (isinstance(index, int) and 0 <= index < MAX_ADDR_INDEX):
+            bad('input index')
+        if not isinstance(staked, bool):
+            bad('input staked flag')
+        if token is not None and not (isinstance(token, bytes) and len(token) == 40):
+            bad('input token id')
         if ohash in seen:
-            raise UserFacingException(_('Duplicate proposal input'))
+            bad('duplicate input')
         seen.add(ohash)
         utxos.append(SpendableOutput(
             output_hash=ohash.hex(), amount=amount, gamma_hex=gamma.hex(),
             blinding_key_hex=blind.hex(), account=account, index=index,
-            staked_commitment=bool(staked),
+            staked_commitment=staked,
             token_id_hex=token.hex() if token else None))
     recipients = []
     for item in outs_raw:
+        if not (isinstance(item, list) and len(item) == 7):
+            bad('output arity')
         (address, amount, memo, otype, min_stake, deleg, token) = item
-        if not (isinstance(amount, int) and amount > 0):
-            raise UserFacingException(_('Malformed proposal output'))
+        if not isinstance(address, str) or not address:
+            bad('output address')
+        if not (isinstance(amount, int) and 0 < amount < 2**63):
+            bad('output amount')
+        if not isinstance(memo, str):
+            bad('output memo')
         if otype not in ('Normal', 'StakedCommitment'):
-            raise UserFacingException(_('Malformed proposal output type'))
+            bad('output type')
+        if not (isinstance(min_stake, int) and 0 <= min_stake < 2**63):
+            bad('output min stake')
+        if token is not None and not (isinstance(token, bytes) and len(token) == 40):
+            bad('output token id')
         delegation = None
         if deleg is not None:
+            if not (isinstance(deleg, list) and len(deleg) == 2
+                    and isinstance(deleg[0], bytes) and isinstance(deleg[1], str)):
+                bad('output delegation')
             delegation = stake_delegation.DelegationRequest(deleg[0], deleg[1])
         recipients.append(Recipient(
-            address, amount, memo or '', otype, min_stake, delegation,
+            address, amount, memo, otype, min_stake, delegation,
             token_id_hex=token.hex() if token else None))
     return utxos, recipients, fee, bool(payload.get('sub'))
