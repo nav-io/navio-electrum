@@ -1,3 +1,29 @@
+# Release 4.9.1 - (August 14, 2026)
+ * Air-gapped signing hardening (adversarial audit of the QR protocol):
+    - Proposals are now fully structurally validated on the offline
+      signer (field types, arity, bounds on account, address index and
+      amounts), so a compromised online device cannot crash the signer
+      or exhaust its keypool with hostile payloads.
+    - QR fragment reassembly resets when parts disagree about the total
+      count, and payload decompression is size-bounded.
+ * QML: fixed a regression where the continuous QR scanner stopped
+   working after the first decoded frame, and a camera activation race
+   in the scan component used by the air-gap dialogs.
+ * QML: a failed proposal no longer opens the signing dialog with a
+   stale QR code, and the invoice dialog closes after a successful
+   air-gapped broadcast.
+ * Desktop: watch-only send/stake/token flows show a proper message on
+   insufficient funds instead of the crash reporter; camera errors
+   during multi-part scanning are shown as messages; fixed dialog
+   parenting from the staking and tokens windows.
+ * View keys are now directly compatible with navio-core: the exported
+   view key can be passed to navio-core's createwallet, and both the
+   new and the legacy format are accepted on import.
+ * Fixed a crash when creating a watch-only wallet in the Android
+   wizard, and a desktop crash when opening the multi-part QR scanner.
+ * sendtoken: documented the memo argument.
+
+
 # Release 4.9.0 - (August 13, 2026)
  * Air-gapped QR signing:
     - new: watch-only wallets can now spend, stake, delegate and send
