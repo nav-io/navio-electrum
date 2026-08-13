@@ -716,11 +716,11 @@ class NewWalletWizard(KeystoreWizard):
             storage = WalletStorage(path)
         except StorageReadWriteError as e:
             raise UserFacingException(e)
-        from .blsct_wallet import is_blsct_view_key_str
+        from .blsct_wallet import is_blsct_view_key_str, split_blsct_view_key_str
         seed_text = ' '.join(data['seed'].split())
         passphrase = data.get('seed_extra_words', '') if data.get('seed_extend') else ''
         if is_blsct_view_key_str(seed_text):
-            vk, sp = seed_text.lower().split(':')
+            vk, sp = split_blsct_view_key_str(seed_text)
             k = BlsctKeyStore.from_view_key(vk, sp)
         elif len(seed_text) == 64 and all(c in '0123456789abcdefABCDEF' for c in seed_text):
             k = BlsctKeyStore.from_seed_hex(seed_text.lower(), passphrase=passphrase)

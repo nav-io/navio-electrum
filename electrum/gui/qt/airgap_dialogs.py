@@ -80,9 +80,20 @@ def _scan_multipart(parent, config, on_payload, on_error):
             return
         on_payload(payload)
 
-    dialog = _scan_multipart._dialog = MultipartCameraDialog(parent=parent, config=config)
-    dialog.qr_finished.connect(on_finished)
-    dialog.start_scan(config.VIDEO_DEVICE_PATH)
+    # mirror stock scan_qrcode error handling: no camera, no QR-detection
+    # library, or a camera error must surface as a message, not a crash
+    from electrum.qrreader import MissingQrDetectionLib
+    from .qrreader.qtmultimedia.camera_dialog import (
+        CameraError, NoCamerasFound)
+    try:
+        dialog = _scan_multipart._dialog = MultipartCameraDialog(
+            parent=parent, config=config)
+        dialog.qr_finished.connect(on_finished)
+        dialog.start_scan(config.VIDEO_DEVICE_PATH)
+    except (MissingQrDetectionLib, CameraError, NoCamerasFound) as e:
+        on_error(str(e))
+    except Exception as e:
+        on_error(repr(e))
 
 
 class AirgapSignDialog(WindowModalDialog):
@@ -90,8 +101,9 @@ class AirgapSignDialog(WindowModalDialog):
     broadcast."""
 
     def __init__(self, window: 'ElectrumWindow', proposal: dict,
-                 subtitle: str = ''):
-        WindowModalDialog.__init__(self, window, _('Sign with offline device'))
+                 subtitle: str = '', parent=None):
+        WindowModalDialog.__init__(self, parent or window,
+                                   _('Sign with offline device'))
         self.window = window
         self.wallet = window.wallet
         fragments = airgap.payload_to_fragments(proposal)
@@ -129,8 +141,8 @@ class AirgapSignDialog(WindowModalDialog):
     def _on_reply(self, payload: dict):
         try:
             txid, raw_hex = self.wallet.check_airgap_reply(payload)
-        except UserFacingException as e:
-            self.window.show_error(str(e))
+        except Exception as e:
+            self.window.show_error(str(e) or repr(e))
             return
 
         def task():
@@ -207,8 +219,8 @@ class AirgapSignerDialog(WindowModalDialog):
     def _on_proposal(self, payload: dict):
         try:
             summary = self.wallet.check_airgap_proposal(payload)
-        except UserFacingException as e:
-            self.window.show_error(str(e))
+        except Exception as e:
+            self.window.show_error(str(e) or repr(e))
             return
         self.payload = payload
         self.tree.clear()

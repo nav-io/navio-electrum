@@ -131,12 +131,19 @@ Item {
                 : invoice.amountOverride
             airgapRequest.makeSendProposal(invoice.address, amount,
                                            invoice.message, amount.isMax)
+            if (airgapRequest.fragments.length == 0)
+                return
             var agdialog = airgapSignDialog.createObject(mainView, {
                 request: airgapRequest,
                 subtitle: qsTr('Sending %1 to %2').arg(
                     amount.isMax ? qsTr('all funds') : Config.formatSats(amount, true)
                 ).arg(invoice.address)
             })
+            var closeInvoice = function(txid) {
+                airgapRequest.broadcastSuccess.disconnect(closeInvoice)
+                invoicedialog.close()
+            }
+            airgapRequest.broadcastSuccess.connect(closeInvoice)
             agdialog.open()
             return
         }

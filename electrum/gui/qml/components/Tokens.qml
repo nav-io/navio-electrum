@@ -295,6 +295,10 @@ Pane {
                             airgapRequest.makeTokenSendProposal(
                                 _sendTokenDialog.tokenId,
                                 sendAddress.text.trim(), amount, '')
+                            if (airgapRequest.fragments.length == 0) {
+                                _sendTokenDialog.close()
+                                return
+                            }
                             var d = airgapSignDialog.createObject(root, {
                                 request: airgapRequest,
                                 subtitle: qsTr('Send %1 %2').arg(amount).arg(_sendTokenDialog.tokenName)

@@ -88,6 +88,8 @@ class QEQRParser(QObject):
 
         if not videoframe.isValid():
             self._logger.debug('invalid frame')
+            self._busy = False
+            self.busyChanged.emit()
             return
 
         async def co_parse_qr(frame):
@@ -118,8 +120,11 @@ class QEQRParser(QObject):
         if len(self.qrreader_res) > 0:
             result = self.qrreader_res[0]
             if self._continuous:
-                # keep scanning: the consumer collects each decode
-                self.dataScanned.emit(result)
+                # keep scanning: the consumer collects each decode.
+                # note: emit the decoded string (the signal is typed str);
+                # emitting the QrCodeResult object raises inside the
+                # discarded coroutine and wedges the scanner
+                self.dataScanned.emit(result.data)
             else:
                 self._data = result
                 self.dataChanged.emit()

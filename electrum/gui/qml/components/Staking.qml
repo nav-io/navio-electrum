@@ -304,6 +304,10 @@ Pane {
                         if (Daemon.currentWallet.isWatchOnly) {
                             airgapRequest.makeStakeProposal(stakeAmount.textAsSats,
                                 stakeDelegateKey.text, stakeRewardAddress.text)
+                            if (airgapRequest.fragments.length == 0) {
+                                _stakeDialog.close()
+                                return
+                            }
                             var d = airgapSignDialog.createObject(root, {
                                 request: airgapRequest,
                                 subtitle: qsTr('Stake %1').arg(Config.formatSats(stakeAmount.textAsSats, true))
@@ -402,6 +406,10 @@ Pane {
                         var amt = unstakeAmount.textAsSats ? unstakeAmount.textAsSats : Config.unitsToSats('')
                         if (Daemon.currentWallet.isWatchOnly) {
                             airgapRequest.makeUnstakeProposal(amt, key)
+                            if (airgapRequest.fragments.length == 0) {
+                                _unstakeDialog.close()
+                                return
+                            }
                             var d = airgapSignDialog.createObject(root, {
                                 request: airgapRequest,
                                 subtitle: qsTr('Unstake')

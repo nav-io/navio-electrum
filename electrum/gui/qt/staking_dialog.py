@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
                              QLineEdit, QGridLayout)
 
 from electrum.i18n import _
-from electrum.util import UserFacingException
+from electrum.util import UserFacingException, NotEnoughFunds
 
 from .util import (WindowModalDialog, Buttons, OkButton, CancelButton,
                    WaitingDialog)
@@ -171,10 +171,10 @@ class StakingDialog(WindowModalDialog):
                 proposal = self.wallet.make_stake_proposal(
                     amount, delegate_key_hex=delegate_key,
                     reward_address=reward_addr)
-            except UserFacingException as e:
+            except (UserFacingException, NotEnoughFunds) as e:
                 self.window.show_error(str(e))
                 return
-            AirgapSignDialog(self.window, proposal, _('Stake')).exec()
+            AirgapSignDialog(self.window, proposal, _('Stake'), parent=self).exec()
             self.update_list()
             return
 
@@ -224,10 +224,10 @@ class StakingDialog(WindowModalDialog):
             try:
                 proposal = self.wallet.make_unstake_proposal(
                     amount, delegate_key_hex=key or None)
-            except UserFacingException as e:
+            except (UserFacingException, NotEnoughFunds) as e:
                 self.window.show_error(str(e))
                 return
-            AirgapSignDialog(self.window, proposal, _('Unstake')).exec()
+            AirgapSignDialog(self.window, proposal, _('Unstake'), parent=self).exec()
             self.update_list()
             return
 

@@ -654,7 +654,7 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
             try:
                 proposal = self.wallet.make_send_proposal(
                     recipients, subtract_fee_from_amount=is_max)
-            except UserFacingException as e:
+            except (UserFacingException, NotEnoughFunds) as e:
                 self.show_error(str(e))
                 return
             AirgapSignDialog(self.window, proposal).exec()
