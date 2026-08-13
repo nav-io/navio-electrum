@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Optional, List, Tuple
 from PyQt6.QtCore import Qt, QTimer, QRect, pyqtSignal
 from PyQt6.QtGui import QPen, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget,
-                             QFileDialog, QSlider, QGridLayout, QDialog, QApplication, QTextEdit)
+                             QFileDialog, QSlider, QGridLayout, QDialog, QApplication, QTextEdit,
+                             QCheckBox)
 
 from electrum.bip32 import is_bip32_derivation, BIP32Node, normalize_bip32_derivation, xpub_type
 from electrum.daemon import Daemon
@@ -595,9 +596,19 @@ class WCBlsctConfirmSeed(WalletWizardComponent):
             is_seed=lambda x: ' '.join(x.split()) == self.wizard_data['seed'],
             config=self.wizard.config,
         )
-        self.seed_widget.validChanged.connect(lambda valid: setattr(self, 'valid', valid))
+        self._seed_valid = False
+
+        def on_seed_valid_changed(v):
+            self._seed_valid = v
+            self._update_valid()
+        self.seed_widget.validChanged.connect(on_seed_valid_changed)
         self.layout().addWidget(self.seed_widget)
-        wizard.app.clipboard().clear()
+        self.skip_cb = QCheckBox(_('Skip verification (I have saved my seed)'))
+        self.skip_cb.toggled.connect(self._update_valid)
+        self.layout().addWidget(self.skip_cb)
+
+    def _update_valid(self, *_args):
+        self.valid = self.skip_cb.isChecked() or self._seed_valid
 
     def apply(self):
         pass

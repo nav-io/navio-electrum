@@ -47,6 +47,7 @@ WizardComponent {
                 Layout.fillWidth: true
                 Layout.topMargin: constants.paddingLarge
 
+                allowPaste: true
                 placeholderText: qsTr('Enter your seed')
 
                 indicatorValid: root._seedValid

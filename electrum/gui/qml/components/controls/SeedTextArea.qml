@@ -12,6 +12,7 @@ Pane {
 
     property string text
     property bool readOnly: false
+    property bool allowPaste: false
     property alias placeholderText: seedtextarea.placeholderText
     property string indicatorText
     property bool indicatorValid
@@ -83,6 +84,18 @@ Pane {
                 bottomPadding: root.indicatorText != '' ? constants.paddingXXSmall/2 : 0
                 font.bold: false
                 font.pixelSize: constants.fontSizeSmall
+            }
+        }
+
+        FlatButton {
+            Layout.fillWidth: true
+            visible: root.allowPaste && !root.readOnly
+            text: qsTr('Paste')
+            icon.source: '../../../icons/copy_bw.png'
+            onClicked: {
+                var clip = AppController.clipboardToText().trim()
+                if (clip)
+                    seedtextarea.text = clip
             }
         }
 

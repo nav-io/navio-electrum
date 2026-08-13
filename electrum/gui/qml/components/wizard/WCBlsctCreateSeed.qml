@@ -71,6 +71,50 @@ WizardComponent {
                 }
             }
 
+            RowLayout {
+                Layout.fillWidth: true
+
+                FlatButton {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 1
+                    enabled: seedtext.text != ''
+                    text: copiedTimer.running ? qsTr('Copied') : qsTr('Copy')
+                    icon.source: '../../../icons/copy_bw.png'
+                    onClicked: {
+                        AppController.textToClipboard(seedtext.text)
+                        copiedTimer.restart()
+                    }
+                }
+                FlatButton {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 1
+                    enabled: seedtext.text != ''
+                    text: qsTr('Share')
+                    icon.source: '../../../icons/share.png'
+                    onClicked: {
+                        var dialog = app.genericShareDialog.createObject(app, {
+                            title: qsTr('Wallet seed'),
+                            text: seedtext.text
+                        })
+                        dialog.open()
+                    }
+                }
+            }
+
+            Timer {
+                id: copiedTimer
+                interval: 2000
+                repeat: false
+            }
+
+            Label {
+                Layout.fillWidth: true
+                font.pixelSize: constants.fontSizeSmall
+                color: constants.mutedForeground
+                wrapMode: Text.Wrap
+                text: qsTr('The clipboard can be read by other apps. Paper is safer.')
+            }
+
             Component.onCompleted : {
                 setWarningText(24)
             }

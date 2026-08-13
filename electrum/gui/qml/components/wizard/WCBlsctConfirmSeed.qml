@@ -13,6 +13,10 @@ WizardComponent {
     valid: false
 
     function checkValid() {
+        if (skipCheck.checked) {
+            valid = true
+            return
+        }
         var entered = confirm.text.trim().split(/\s+/).join(' ')
         valid = entered == wizard_data['seed']
     }
@@ -44,8 +48,17 @@ WizardComponent {
                 id: confirm
                 Layout.fillWidth: true
                 Layout.topMargin: constants.paddingSmall
+                allowPaste: true
                 placeholderText: qsTr('Enter your seed')
                 onTextChanged: checkValid()
+            }
+
+            ElCheckBox {
+                id: skipCheck
+                Layout.fillWidth: true
+                Layout.topMargin: constants.paddingMedium
+                text: qsTr('Skip verification (I have saved my seed)')
+                onCheckedChanged: checkValid()
             }
         }
     }
