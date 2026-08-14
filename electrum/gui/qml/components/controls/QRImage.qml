@@ -5,6 +5,7 @@ Item {
     id: root
     property string qrdata
     property bool render: true // init to false, then set true if render needs delay
+    property bool showLogo: true // dense payloads (airgap fragments) need every module
     property bool enableToggleText: false  // if true, clicking the QR code shows the encoded text
     property bool isTextState: false    // internal state, if the above is enabled
 
@@ -27,7 +28,7 @@ Item {
         visible: !isTextState
 
         Rectangle {  // container for logo inside qr code
-            visible: root.render && _qrprops.valid
+            visible: root.render && _qrprops.valid && root.showLogo
             color: 'white'
             x: (parent.width - width) / 2
             y: (parent.height - height) / 2

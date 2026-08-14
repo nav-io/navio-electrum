@@ -25,6 +25,10 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             qrdata: root.fragments.length > 0 ? root.fragments[root._index] : ''
             render: root.fragments.length > 0
+            // no logo overlay: fragment QRs are dense and scanned from
+            // another screen; the logo eats into the error correction
+            // budget and can make them undecodable
+            showLogo: false
         }
 
         Label {
