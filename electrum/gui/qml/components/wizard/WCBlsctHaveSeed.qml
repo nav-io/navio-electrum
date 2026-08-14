@@ -40,7 +40,7 @@ WizardComponent {
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: qsTr('Enter your 24-word Navio seed phrase (or 64-character hex seed).')
+                text: qsTr('Enter your Navio seed phrase: 24 words, or 26 with the birthday words (or a 64-character hex seed).')
             }
 
             SeedTextArea {
