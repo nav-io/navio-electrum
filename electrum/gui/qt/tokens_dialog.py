@@ -182,8 +182,11 @@ class TokensDialog(WindowModalDialog):
         grid.addWidget(nft_cb, 2, 1)
         vbox = QVBoxLayout(d)
         vbox.addLayout(grid)
-        note = QLabel(_('Each wallet controls exactly one token, derived from '
-                        'its seed. After creating it, use Mint to issue units.'))
+        note = QLabel(_('A wallet can create any number of tokens. Each '
+                        'token\'s key is derived from the wallet seed and the '
+                        'token\'s metadata, so the same name and supply always '
+                        'map back to the same token after a restore. After '
+                        'creating one, use Mint to issue units.'))
         note.setWordWrap(True)
         vbox.addWidget(note)
         vbox.addLayout(Buttons(CancelButton(d), OkButton(d)))
@@ -205,37 +208,63 @@ class TokensDialog(WindowModalDialog):
             _('Token created.'))
 
     def _mint_dialog(self):
-        meta = self.wallet.db.get('blsct_token_meta') or {}
-        is_nft = bool(meta.get('is_nft'))
+        tokens = self.wallet.get_created_tokens()
         d = WindowModalDialog(self, _('Mint'))
         grid = QGridLayout()
-        grid.addWidget(QLabel(_('Destination')), 0, 0)
+        row = 0
+        token_combo = None
+        keys = list(tokens.keys())
+        if len(keys) > 1:
+            from PyQt6.QtWidgets import QComboBox
+            token_combo = QComboBox()
+            for k in keys:
+                e = tokens[k]
+                label = (e.get('metadata') or {}).get('name') or k[:16]
+                if e.get('is_nft'):
+                    label += ' ' + _('(NFT collection)')
+                token_combo.addItem(label, k)
+            grid.addWidget(QLabel(_('Token')), row, 0)
+            grid.addWidget(token_combo, row, 1)
+            row += 1
+        grid.addWidget(QLabel(_('Destination')), row, 0)
         addr_e = QLineEdit(self.wallet.get_receiving_address())
         addr_e.setMinimumWidth(420)
-        grid.addWidget(addr_e, 0, 1)
-        if is_nft:
-            grid.addWidget(QLabel(_('NFT number')), 1, 0)
-            id_e = QLineEdit()
-            grid.addWidget(id_e, 1, 1)
-            grid.addWidget(QLabel(_('NFT name')), 2, 0)
-            name_e = QLineEdit()
-            grid.addWidget(name_e, 2, 1)
-        else:
-            grid.addWidget(QLabel(_('Amount')), 1, 0)
-            amount_e = QLineEdit()
-            grid.addWidget(amount_e, 1, 1)
+        grid.addWidget(addr_e, row, 1)
+        row += 1
+        # both field sets exist; visibility follows the selected token type
+        id_lb, id_e = QLabel(_('NFT number')), QLineEdit()
+        name_lb, name_e = QLabel(_('NFT name')), QLineEdit()
+        amount_lb, amount_e = QLabel(_('Amount')), QLineEdit()
+        grid.addWidget(id_lb, row, 0); grid.addWidget(id_e, row, 1); row += 1
+        grid.addWidget(name_lb, row, 0); grid.addWidget(name_e, row, 1); row += 1
+        grid.addWidget(amount_lb, row, 0); grid.addWidget(amount_e, row, 1); row += 1
+
+        def selected_key():
+            return token_combo.currentData() if token_combo else (keys[0] if keys else None)
+
+        def sync_fields():
+            nft = bool(tokens.get(selected_key(), {}).get('is_nft'))
+            for w in (id_lb, id_e, name_lb, name_e):
+                w.setVisible(nft)
+            for w in (amount_lb, amount_e):
+                w.setVisible(not nft)
+
+        if token_combo:
+            token_combo.currentIndexChanged.connect(sync_fields)
         vbox = QVBoxLayout(d)
         vbox.addLayout(grid)
-        if not meta:
+        if not tokens:
             note = QLabel(_('Note: no created token found in this wallet; '
                             'minting only works after Create token.'))
             note.setWordWrap(True)
             vbox.addWidget(note)
         vbox.addLayout(Buttons(CancelButton(d), OkButton(d)))
+        sync_fields()
         if not d.exec():
             return
         dest = addr_e.text().strip()
-        if is_nft:
+        token_sel = selected_key()
+        if bool(tokens.get(token_sel, {}).get('is_nft')):
             try:
                 nft_id = int(id_e.text())
             except ValueError:
@@ -244,7 +273,7 @@ class TokensDialog(WindowModalDialog):
             nft_meta = {'name': name_e.text().strip()} if name_e.text().strip() else {}
             self._broadcast(
                 lambda password: self.wallet.mint_nft(
-                    dest, nft_id, nft_meta, password=password),
+                    dest, nft_id, nft_meta, password=password, token=token_sel),
                 _('NFT minted.'))
         else:
             try:
@@ -254,5 +283,5 @@ class TokensDialog(WindowModalDialog):
                 return
             self._broadcast(
                 lambda password: self.wallet.mint_token(
-                    dest, amount, password=password),
+                    dest, amount, password=password, token=token_sel),
                 _('Tokens minted.'))

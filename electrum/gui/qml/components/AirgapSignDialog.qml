@@ -125,7 +125,7 @@ ElDialog {
         target: dialog.request
         function onBroadcastSuccess(txid) {
             var d = app.messageDialog.createObject(app, {
-                text: qsTr('Payment sent.') + '\n\n' + qsTr('Transaction ID:') + ' ' + txid
+                text: qsTr('Payment sent.') + '\n\n' + qsTr('Reference:') + ' ' + txid
             })
             d.open()
             dialog.close()

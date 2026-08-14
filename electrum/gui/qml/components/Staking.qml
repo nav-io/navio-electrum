@@ -21,7 +21,7 @@ Pane {
 
         onStakingSuccess: (message, txid) => {
             var dialog = app.messageDialog.createObject(app, {
-                text: message + '\n\n' + qsTr('Transaction ID:') + ' ' + txid
+                text: message + '\n\n' + qsTr('Reference:') + ' ' + txid
             })
             dialog.open()
         }

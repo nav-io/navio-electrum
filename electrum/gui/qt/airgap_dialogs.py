@@ -154,7 +154,7 @@ class AirgapSignDialog(WindowModalDialog):
         def on_success(sent_txid):
             self.accept()
             self.window.show_message(
-                _('Payment sent.') + '\n\n' + _('Transaction ID:') + ' ' + sent_txid)
+                _('Payment sent.') + '\n\n' + _('Reference:') + ' ' + sent_txid)
 
         def on_error(exc_info):
             e = exc_info[1]

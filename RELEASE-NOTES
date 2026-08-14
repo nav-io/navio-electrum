@@ -1,3 +1,18 @@
+# Release 4.9.4 - (August 14, 2026)
+ * Transactions are now referenced by output hash instead of txid,
+   matching navio-core: BLSCT transaction ids mutate when a block
+   aggregates transactions, so history entries and broadcast
+   confirmations previously changed identity on confirmation. Outgoing
+   entries reference the destination output, incoming entries the
+   received output; the UIs label this "Reference".
+ * Full multi-token support: a wallet can create any number of tokens
+   and NFT collections. Per-token keys are derived navio-core style
+   from the master token key and the token's metadata + supply, so the
+   same metadata always maps back to the same token after a restore.
+   Mint lets you pick the token; the CLI gains a token argument on
+   minttoken/mintnft.
+
+
 # Release 4.9.3 - (August 14, 2026)
  * Air-gapped signing: fixed QR scanning between real devices.
     - Fragment QR codes no longer draw the app logo over the middle of
