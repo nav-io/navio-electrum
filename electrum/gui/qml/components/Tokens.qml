@@ -21,7 +21,7 @@ Pane {
 
         onSendSuccess: (txid) => {
             var dialog = app.messageDialog.createObject(app, {
-                text: qsTr('Tokens sent.') + '\n\n' + qsTr('Transaction ID:') + ' ' + txid
+                text: qsTr('Tokens sent.') + '\n\n' + qsTr('Reference:') + ' ' + txid
             })
             dialog.open()
         }

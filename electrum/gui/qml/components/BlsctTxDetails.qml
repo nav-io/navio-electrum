@@ -103,7 +103,7 @@ Pane {
                 Label {
                     Layout.columnSpan: 2
                     Layout.topMargin: constants.paddingSmall
-                    text: qsTr('Transaction ID')
+                    text: qsTr('Reference')
                     color: Material.accentColor
                 }
 
@@ -124,7 +124,7 @@ Pane {
                         icon.color: 'transparent'
                         onClicked: {
                             var dialog = app.genericShareDialog.createObject(app, {
-                                title: qsTr('Transaction ID'),
+                                title: qsTr('Reference'),
                                 text: root.txid
                             })
                             dialog.open()

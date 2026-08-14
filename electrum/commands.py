@@ -643,8 +643,10 @@ class Commands(Logger):
     @command('wnp')
     async def createtoken(self, name, total_supply, is_nft=False, metadata=None,
                           password=None, wallet: Abstract_Wallet = None):
-        """Create this wallet's token (or NFT collection with is_nft=1).
-        Each wallet controls exactly one token, derived from its seed.
+        """Create a token (or NFT collection with is_nft=1). A wallet can
+        create any number of tokens; each token's key is derived from the
+        wallet seed and the token's metadata + total supply, so the same
+        metadata always maps back to the same token after a restore.
 
         arg:str:name:Token name (stored in the on-chain metadata)
         arg:int:total_supply:Maximum supply
@@ -660,33 +662,38 @@ class Commands(Logger):
         return {'txid': txid, 'fee': built.fee}
 
     @command('wnp')
-    async def minttoken(self, destination, amount, password=None,
+    async def minttoken(self, destination, amount, token=None, password=None,
                         wallet: Abstract_Wallet = None):
-        """Mint units of this wallet's fungible token to an address.
+        """Mint units of one of this wallet's fungible tokens to an address.
 
         arg:str:destination:Navio (nav1...) address
         arg:int:amount:Token units to mint
+        arg:str:token:Which token (name, token id, or public key); optional when the wallet created exactly one
         """
-        built = wallet.mint_token(destination, int(amount), password=password)
+        built = wallet.mint_token(destination, int(amount), password=password,
+                                  token=token)
         txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
         return {'txid': txid, 'fee': built.fee}
 
     @command('wnp')
     async def mintnft(self, destination, nft_id, name=None, metadata=None,
-                      password=None, wallet: Abstract_Wallet = None):
-        """Mint one NFT of this wallet's collection to an address.
+                      token=None, password=None,
+                      wallet: Abstract_Wallet = None):
+        """Mint one NFT of one of this wallet's collections to an address.
 
         arg:str:destination:Navio (nav1...) address
         arg:int:nft_id:NFT number within the collection
         arg:str:name:Optional NFT name (stored in the on-chain metadata)
         arg:str:metadata:Optional extra metadata as JSON object
+        arg:str:token:Which collection (name, token id, or public key); optional when the wallet created exactly one
         """
         meta = {}
         if name:
             meta['name'] = name
         if metadata:
             meta.update(json.loads(metadata))
-        built = wallet.mint_nft(destination, int(nft_id), meta, password=password)
+        built = wallet.mint_nft(destination, int(nft_id), meta, password=password,
+                                token=token)
         txid = await wallet.broadcast_blsct_transaction(built.raw_hex)
         return {'txid': txid, 'fee': built.fee}
 

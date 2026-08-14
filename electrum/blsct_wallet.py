@@ -595,10 +595,58 @@ class Blsct_Wallet(Abstract_Wallet):
             names[token_id_hex[:64]] = name
             self.db.put('blsct_token_names', names)
 
+    def get_created_tokens(self) -> Dict[str, dict]:
+        """Tokens/collections created by this wallet, keyed by the token's
+        public key (hex). A wallet can create any number of tokens; each
+        token key is derived from the seed's master token key and the
+        token's metadata + total supply (navio-core KeyMan::GetTokenKey)."""
+        # deep-convert: db.get returns StoredDicts (not deepcopy-able),
+        # and we hand this dict back to db.put after modifying it
+        def plain(o):
+            if isinstance(o, dict):
+                return {k: plain(v) for k, v in o.items()}
+            if isinstance(o, (list, tuple)):
+                return [plain(v) for v in o]
+            return o
+        tokens = plain(dict(self.db.get('blsct_tokens') or {}))
+        legacy = plain(dict(self.db.get('blsct_token_meta') or {})) or None
+        if legacy and not tokens:
+            # migrate the old single-token record
+            try:
+                pub = self.keyring.token_pubkey_for(
+                    legacy.get('metadata') or {}, legacy.get('total_supply') or 0)
+                key = pub.serialize()
+                key = key.hex() if isinstance(key, bytes) else key
+            except Exception:
+                key = 'legacy'
+            tokens[key] = dict(legacy)
+            self.db.put('blsct_tokens', tokens)
+        return tokens
+
+    def _resolve_created_token(self, token: Optional[str]) -> Tuple[str, dict]:
+        tokens = self.get_created_tokens()
+        if not tokens:
+            raise UserFacingException('this wallet has not created any tokens')
+        if token:
+            t = token.lower()
+            for key, entry in tokens.items():
+                if t in (key.lower(), (entry.get('token_id') or '').lower(),
+                         (entry.get('metadata') or {}).get('name', '').lower()):
+                    return key, entry
+            raise UserFacingException(f'unknown token: {token}')
+        if len(tokens) == 1:
+            return next(iter(tokens.items()))
+        names = ', '.join((e.get('metadata') or {}).get('name', k[:16])
+                          for k, e in tokens.items())
+        raise UserFacingException(
+            f'this wallet created several tokens ({names}); specify which one')
+
     def create_token(self, metadata: Dict[str, str], total_supply: int,
                      is_nft: bool = False, password=None):
-        """Create this wallet's token / NFT collection. One per wallet (the
-        token key is derived from the seed). Returns BuiltTx."""
+        """Create a token / NFT collection. A wallet can create many; the
+        per-token key is derived from the seed and the token's metadata +
+        supply, so the same metadata always maps to the same token.
+        Returns BuiltTx."""
         keyring = self._spending_keyring(password)
         coins = self.get_spendable_coins()
         coins.sort(key=lambda c: -c.d['amount'])
@@ -614,15 +662,21 @@ class Blsct_Wallet(Abstract_Wallet):
         built = navio_blsct.build_create_token_tx(
             keyring, [self._coin_to_spendable(c) for c in selected],
             metadata, total_supply, is_nft)
-        self.db.put('blsct_token_meta', {
+        tokens = self.get_created_tokens()
+        pub = keyring.token_pubkey_for(metadata, total_supply)
+        key = pub.serialize()
+        key = key.hex() if isinstance(key, bytes) else key
+        tokens[key] = {
             'metadata': dict(metadata or {}),
             'total_supply': int(total_supply),
             'is_nft': bool(is_nft),
             'create_txid': built.txid,
-        })
+            'token_id': None,  # learned from the first mint output
+        }
+        self.db.put('blsct_tokens', tokens)
         return built
 
-    def _mint_common(self, build, password):
+    def _mint_common(self, build, password, token_entry_key=None):
         keyring = self._spending_keyring(password)
         coins = self.get_spendable_coins()
         coins.sort(key=lambda c: -c.d['amount'])
@@ -636,14 +690,19 @@ class Blsct_Wallet(Abstract_Wallet):
         if amt < est:
             raise NotEnoughFunds()
         built = build(keyring, [self._coin_to_spendable(c) for c in selected])
-        # learn our token id from the mint output and bind the stored metadata
+        # learn the token id from the mint output and bind the stored metadata
         try:
             parsed = navio_blsct.parse_tx_hex(built.raw_hex)
             for out in parsed.outputs:
                 if out.token_id and out.token_id != bytes(32):
                     tid = (out.token_id.hex()
                            + out.token_nft_id.to_bytes(8, 'little', signed=True).hex())
-                    meta = (self.db.get('blsct_token_meta') or {}).get('metadata') or {}
+                    tokens = self.get_created_tokens()
+                    entry = tokens.get(token_entry_key) if token_entry_key else None
+                    if entry is not None:
+                        entry['token_id'] = out.token_id.hex()
+                        self.db.put('blsct_tokens', tokens)
+                    meta = (entry or {}).get('metadata') or {}
                     if meta.get('name'):
                         self._remember_token_name(tid, meta['name'])
                     break
@@ -651,20 +710,33 @@ class Blsct_Wallet(Abstract_Wallet):
             self.logger.exception('could not extract token id from mint tx')
         return built
 
-    def mint_token(self, dest_address: str, amount: int, password=None):
-        """Mint units of this wallet's fungible token. Returns BuiltTx."""
+    def mint_token(self, dest_address: str, amount: int, password=None,
+                   token: Optional[str] = None):
+        """Mint units of one of this wallet's fungible tokens. `token`
+        selects by name, token id, or token public key; may be omitted when
+        the wallet created exactly one token. Returns BuiltTx."""
+        key, entry = self._resolve_created_token(token)
         return self._mint_common(
             lambda keyring, utxos: navio_blsct.build_mint_token_tx(
-                keyring, utxos, dest_address, amount),
-            password)
+                keyring, utxos, dest_address, amount,
+                token_key=keyring.token_key_for(
+                    entry.get('metadata') or {}, entry.get('total_supply') or 0)),
+            password, token_entry_key=key)
 
     def mint_nft(self, dest_address: str, nft_id: int,
-                 metadata: Dict[str, str], password=None):
-        """Mint one NFT of this wallet's collection. Returns BuiltTx."""
+                 metadata: Dict[str, str], password=None,
+                 token: Optional[str] = None):
+        """Mint one NFT of one of this wallet's collections. `metadata` is
+        the NFT item's own metadata; `token` selects the collection (name,
+        token id, or public key), optional when there is exactly one.
+        Returns BuiltTx."""
+        key, entry = self._resolve_created_token(token)
         return self._mint_common(
             lambda keyring, utxos: navio_blsct.build_mint_nft_tx(
-                keyring, utxos, dest_address, nft_id, metadata),
-            password)
+                keyring, utxos, dest_address, nft_id, metadata,
+                token_key=keyring.token_key_for(
+                    entry.get('metadata') or {}, entry.get('total_supply') or 0)),
+            password, token_entry_key=key)
 
     def get_staking_rewards_sat(self) -> int:
         """Total staking rewards ever received: outputs on the staking
@@ -699,20 +771,36 @@ class Blsct_Wallet(Abstract_Wallet):
                     continue  # token amounts are not NAV; shown in the tokens view
                 rtx = d.get('tx_hash')
                 if rtx:
-                    ev = events.setdefault(rtx, {'height': d.get('height', 0), 'delta': 0, 'memos': []})
+                    ev = events.setdefault(rtx, {'height': d.get('height', 0), 'delta': 0, 'memos': [],
+                                                 'recv_hashes': [], 'spent_ref': None})
                     ev['delta'] += d['amount']
                     ev['height'] = d.get('height', 0)
+                    ev['recv_hashes'].append(ohash)
                     if d.get('memo'):
                         ev['memos'].append(d['memo'])
                 stx = d.get('spent_by')
                 if stx:
-                    ev = events.setdefault(stx, {'height': d.get('spent_height', 0), 'delta': 0, 'memos': []})
+                    ev = events.setdefault(stx, {'height': d.get('spent_height', 0), 'delta': 0, 'memos': [],
+                                                 'recv_hashes': [], 'spent_ref': None})
                     ev['delta'] -= d['amount']
                     ev['height'] = d.get('spent_height', 0)
+                    if d.get('spent_ref') and not ev['spent_ref']:
+                        ev['spent_ref'] = d['spent_ref']
         items = []
         for txid, ev in events.items():
+            # user-facing reference: an output hash, not the txid. BLSCT
+            # txids mutate when a block aggregates transactions; output
+            # hashes are stable, and navio-core references transactions
+            # the same way. Outgoing: the destination output hash recorded
+            # when the tx was built/seen; incoming: our received output.
+            if ev['delta'] < 0 and ev['spent_ref']:
+                ref = ev['spent_ref']
+            elif ev['recv_hashes']:
+                ref = sorted(ev['recv_hashes'])[0]
+            else:
+                ref = ev['spent_ref'] or txid
             items.append({
-                'txid': txid,
+                'txid': ref,
                 'height': ev['height'],
                 'amount_sat': ev['delta'],
                 'memos': ev['memos'],
@@ -948,12 +1036,19 @@ class Blsct_Wallet(Abstract_Wallet):
                     }
         return staked, delegation
 
-    def _mark_spent(self, output_hash: str, tx_hash: str, height: int):
+    def _mark_spent(self, output_hash: str, tx_hash: str, height: int,
+                    ref: Optional[str] = None):
         with self._blsct_lock:
             d = self.blsct_outputs.get(output_hash)
             if d is not None:
                 d['spent_by'] = tx_hash
                 d['spent_height'] = height
+                # stable reference for the spending tx: the destination
+                # output hash. BLSCT txids mutate when a block aggregates
+                # transactions; output hashes do not. First write wins so
+                # the reference recorded at broadcast survives confirmation.
+                if ref and not d.get('spent_ref'):
+                    d['spent_ref'] = ref
 
     def _unspend_above(self, height: int):
         with self._blsct_lock:
@@ -1401,17 +1496,38 @@ class Blsct_Wallet(Abstract_Wallet):
             raise UserFacingException('not connected')
         txid = await self.network.interface.session.send_request(
             'blockchain.transaction.broadcast', [raw_hex], timeout=30)
-        self.process_own_transaction(raw_hex, txid)
+        ref = self.process_own_transaction(raw_hex, txid)
         self.save_db()
         util.trigger_callback('wallet_updated', self)
-        return txid
+        # return the stable output-hash reference (txids mutate on
+        # aggregation); callers display this to the user
+        return ref or txid
 
-    def process_own_transaction(self, raw_hex: str, txid: str):
+    def blsct_tx_reference(self, parsed) -> Optional[str]:
+        """Stable user-facing reference for a tx we built: the hash of the
+        destination output (first output not recovered by our view key),
+        falling back to the first output. Same convention as navio-core,
+        which references transactions by output hash because BLSCT txids
+        mutate when transactions are aggregated into a block."""
+        fallback = None
+        for out in parsed.outputs:
+            if not out.has_blsct:
+                continue
+            if fallback is None:
+                fallback = out.output_hash
+            pair = self.keyring.match_output(
+                out.blinding_key.hex(), out.spending_key.hex(), out.view_tag)
+            if not pair:
+                return out.output_hash
+        return fallback
+
+    def process_own_transaction(self, raw_hex: str, txid: str) -> Optional[str]:
         """Mark inputs spent and pick up our own (change) outputs from a tx
-        we just broadcast."""
+        we just broadcast. Returns the stable output-hash reference."""
         parsed = parse_tx_hex(raw_hex)
+        ref = self.blsct_tx_reference(parsed)
         for tin in parsed.inputs:
-            self._mark_spent(tin.prevout_hash, txid, 0)
+            self._mark_spent(tin.prevout_hash, txid, 0, ref=ref)
         for out in parsed.outputs:
             if not out.has_blsct:
                 continue
@@ -1431,6 +1547,7 @@ class Blsct_Wallet(Abstract_Wallet):
                                account=pair[0], addr_index=pair[1],
                                memo=rec.memo, token_id=token_id,
                                staked=staked, delegation=delegation)
+        return ref
 
 
 class BlsctSynchronizer(NetworkJobOnDefaultServer):
@@ -1572,13 +1689,17 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                     continue
                 await self._fetch_and_store_output(tx_hash, height, ohash, bk, pair)
 
+            vout_hashes = [v.get('outputHash') or v.get('output_hash')
+                           for v in vouts]
+            vout_hashes = [h for h in vout_hashes if h]
             for v in vins:
                 prevout = (v.get('prevoutHash') or v.get('prevout_hash')
                            or v.get('outputHash') or v.get('output_hash'))
                 if not prevout:
                     continue
                 if prevout in wallet.blsct_outputs:
-                    wallet._mark_spent(prevout, tx_hash, height)
+                    wallet._mark_spent(prevout, tx_hash, height,
+                                       ref=vout_hashes[0] if vout_hashes else None)
 
     async def _fetch_and_store_output(self, tx_hash: str, height: int,
                                       output_hash: str, blinding_key_hex: str,

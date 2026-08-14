@@ -195,6 +195,70 @@ class TestAirgapFlow(ElectrumTestCase):
         txid, raw_hex = watch.check_airgap_reply(reply)
         self.assertEqual(len(txid), 64)
 
+    def test_stable_output_hash_references(self):
+        """BLSCT txids mutate when a block aggregates transactions, so
+        history items must be referenced by destination output hash."""
+        full, watch = self._make_wallets()
+        dest = full.keyring.address(0, 9)
+        built = full.create_blsct_transaction([(dest, 2_0000_0000, '')])
+        from electrum.navio_blsct import parse_tx_hex
+        parsed = parse_tx_hex(built.raw_hex)
+        ref = full.blsct_tx_reference(parsed)
+        self.assertTrue(ref and len(ref) == 64)
+        full.process_own_transaction(built.raw_hex, built.txid)
+        items = full.get_history_items()
+        # the outgoing event is referenced by the destination output hash,
+        # not by the (mutable) txid
+        ids = {it['txid'] for it in items}
+        self.assertIn(ref, ids)
+        # simulate the block scan seeing the tx under an aggregated hash
+        for oh, d in full.blsct_outputs.items():
+            if d.get('spent_by') == built.txid:
+                full._mark_spent(oh, 'ff' * 32, 500, ref='99' * 32)
+        items2 = full.get_history_items()
+        ids2 = {it['txid'] for it in items2}
+        # the reference recorded at broadcast survives the txid mutation
+        self.assertIn(ref, ids2)
+        self.assertNotIn('99' * 32, ids2)
+
+    def test_incoming_referenced_by_output_hash(self):
+        full, watch = self._make_wallets()
+        items = watch.get_history_items()
+        # funded outputs share tx 'aa'*32; the item must reference one of
+        # the received output hashes, not the funding txid
+        self.assertEqual(len(items), 1)
+        self.assertIn(items[0]['txid'], ('11' * 32, '22' * 32))
+
+    def test_multi_token_registry(self):
+        full, _watch = self._make_wallets()
+        kr = full.keyring
+        k1 = kr.token_key_for({'name': 'Alpha'}, 1000)
+        k1b = kr.token_key_for({'name': 'Alpha'}, 1000)
+        k2 = kr.token_key_for({'name': 'Beta'}, 1000)
+        k3 = kr.token_key_for({'name': 'Alpha'}, 2000)
+        self.assertEqual(k1.serialize(), k1b.serialize())
+        self.assertNotEqual(k1.serialize(), k2.serialize())
+        self.assertNotEqual(k1.serialize(), k3.serialize())
+        self.assertNotEqual(k1.serialize(), kr.token_key.serialize())
+        # create two tokens; both are registered independently
+        full.create_token({'name': 'Alpha'}, 1000)
+        full.create_token({'name': 'Beta'}, 500, is_nft=True)
+        tokens = full.get_created_tokens()
+        self.assertEqual(len(tokens), 2)
+        names = {(e['metadata'].get('name'), e['is_nft']) for e in tokens.values()}
+        self.assertEqual(names, {('Alpha', False), ('Beta', True)})
+        # selection by name works; ambiguity without a selector errors
+        key, entry = full._resolve_created_token('beta')
+        self.assertTrue(entry['is_nft'])
+        with self.assertRaises(UserFacingException):
+            full._resolve_created_token(None)
+        with self.assertRaises(UserFacingException):
+            full._resolve_created_token('nope')
+        # mint against a selected token builds successfully
+        dest = full.keyring.address(0, 3)
+        built = full.mint_token(dest, 10, token='alpha')
+        self.assertTrue(built.raw_hex)
+
     def test_watch_wallet_cannot_sign(self):
         full, watch = self._make_wallets()
         dest = full.keyring.address(0, 5)

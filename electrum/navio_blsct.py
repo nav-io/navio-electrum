@@ -396,6 +396,24 @@ class BlsctKeyRing:
         self._addr_cache = {}        # type: Dict[Tuple[int, int], str]
         self._lock = threading.RLock()
 
+    def token_key_for(self, metadata: Dict[str, str], total_supply: int):
+        """Per-token signing key, navio-core compatible: a wallet controls
+        one key PER TOKEN, derived as
+        derive_child_SK_hash(masterTokenKey, Hash(metadata || totalSupply))
+        (KeyMan::GetTokenKey). Different metadata/supply => different token.
+        """
+        b = get_blsct()
+        import blsct.blsct as low
+        rv = low.calc_collection_token_hash(
+            _metadata_map(low, metadata), int(total_supply))
+        k = low.derive_collection_token_key(
+            self.token_key.value(), low.cast_to_uint256(rv.value))
+        return b.Scalar(k.value if hasattr(k, 'value') else k)
+
+    def token_pubkey_for(self, metadata: Dict[str, str], total_supply: int):
+        b = get_blsct()
+        return b.PublicKey.from_scalar(self.token_key_for(metadata, total_supply))
+
     @classmethod
     def from_view_key(cls, view_key_hex: str, spend_pub_hex: str) -> 'BlsctKeyRing':
         return cls(None, view_key_hex=view_key_hex, spend_pub_hex=spend_pub_hex)
@@ -873,13 +891,14 @@ def build_create_token_tx(keyring: BlsctKeyRing,
     import blsct.blsct as low
 
     def make_outputs():
-        pub = b.PublicKey.from_scalar(keyring.token_key)
+        token_key = keyring.token_key_for(metadata, total_supply)
+        pub = b.PublicKey.from_scalar(token_key)
         meta = _metadata_map(low, metadata)
         info_rv = low.build_token_info(
             low.BlsctNft if is_nft else low.BlsctToken,
             pub.value(), meta, int(total_supply))
         info = info_rv.value if hasattr(info_rv, 'value') else info_rv
-        return [low.build_unsigned_create_token_output(keyring.token_key.value(), info)]
+        return [low.build_unsigned_create_token_output(token_key.value(), info)]
 
     return _build_signed_special_tx(keyring, utxos, make_outputs, fixed_fee=fixed_fee)
 
@@ -888,18 +907,21 @@ def build_mint_token_tx(keyring: BlsctKeyRing,
                         utxos: Sequence[SpendableOutput],
                         dest_address: str,
                         amount: int,
+                        token_key=None,
                         fixed_fee: Optional[int] = None) -> BuiltTx:
-    """Mint `amount` units of this wallet's fungible token to dest_address."""
+    """Mint `amount` units of a fungible token to dest_address. token_key
+    is the per-token key from BlsctKeyRing.token_key_for()."""
     b = get_blsct()
     import blsct.blsct as low
+    tk = token_key if token_key is not None else keyring.token_key
 
     def make_outputs():
         sub_addr = keyring.address_to_subaddr(dest_address)
         blinding_key = b.Scalar.random()
-        pub = b.PublicKey.from_scalar(keyring.token_key)
+        pub = b.PublicKey.from_scalar(tk)
         return [low.build_unsigned_mint_token_output(
             sub_addr.value(), int(amount), blinding_key.value(),
-            keyring.token_key.value(), pub.value())]
+            tk.value(), pub.value())]
 
     return _build_signed_special_tx(keyring, utxos, make_outputs, fixed_fee=fixed_fee)
 
@@ -909,19 +931,23 @@ def build_mint_nft_tx(keyring: BlsctKeyRing,
                       dest_address: str,
                       nft_id: int,
                       metadata: Dict[str, str],
+                      token_key=None,
                       fixed_fee: Optional[int] = None) -> BuiltTx:
-    """Mint NFT number `nft_id` of this wallet's collection to dest_address."""
+    """Mint NFT number `nft_id` of a collection to dest_address. token_key
+    is the collection's key from BlsctKeyRing.token_key_for(); metadata here
+    is the NFT item's own metadata, not the collection's."""
     b = get_blsct()
     import blsct.blsct as low
+    tk = token_key if token_key is not None else keyring.token_key
 
     def make_outputs():
         sub_addr = keyring.address_to_subaddr(dest_address)
         blinding_key = b.Scalar.random()
-        pub = b.PublicKey.from_scalar(keyring.token_key)
+        pub = b.PublicKey.from_scalar(tk)
         meta = _metadata_map(low, metadata)
         return [low.build_unsigned_mint_nft_output(
             sub_addr.value(), blinding_key.value(),
-            keyring.token_key.value(), pub.value(),
+            tk.value(), pub.value(),
             int(nft_id), meta)]
 
     return _build_signed_special_tx(keyring, utxos, make_outputs, fixed_fee=fixed_fee)
