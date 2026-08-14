@@ -196,6 +196,7 @@ class QEDaemon(AuthMixin, QObject):
         # password unification helper:
         # - if pw not given (None), try pw of current wallet.
         # - but "" empty str passwords are kept as-is, to open passwordless wallets
+        used_fallback_password = password is None
         if password is None:
             password = self._password
 
@@ -221,7 +222,29 @@ class QEDaemon(AuthMixin, QObject):
                         force_check_password=True,
                     )
                 except InvalidPassword:
-                    self.walletRequiresPassword.emit(self._name, self._path)
+                    # the cached (single) password may simply not apply, e.g. a
+                    # passwordless watch-only wallet in an otherwise encrypted
+                    # directory: retry openly before prompting
+                    if used_fallback_password and local_password is not None:
+                        try:
+                            wallet = self.daemon.load_wallet(
+                                self._path,
+                                password=None,
+                                upgrade=True,
+                                force_check_password=True,
+                            )
+                        except InvalidPassword:
+                            wallet = None
+                        if wallet is not None:
+                            if self.daemon.config.WALLET_SHOULD_USE_SINGLE_PASSWORD:
+                                # encrypt to the single password so the
+                                # directory stays unified and future loads
+                                # don't prompt
+                                wallet.update_password(None, local_password, encrypt_storage=True)
+                            else:
+                                local_password = None
+                    if wallet is None:
+                        self.walletRequiresPassword.emit(self._name, self._path)
                 except FileNotFoundError:
                     self.walletOpenError.emit(_('File not found') + f":\n{self._path}")
                 except StorageReadWriteError:
