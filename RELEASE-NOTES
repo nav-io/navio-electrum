@@ -1,3 +1,13 @@
+# Release 4.9.5 - (August 14, 2026)
+ * Birthday seed phrases: new wallets get 26 words - the standard
+   BIP39 24 words plus two extra words encoding the wallet's creation
+   time. Restores from 26 words start scanning at the right point in
+   the chain instead of from genesis. Keys derive from the first 24
+   words only, so dropping the extra words still restores the same
+   wallet anywhere BIP39 works. The format is shared with navio-core
+   and navio-sdk.
+
+
 # Release 4.9.4 - (August 14, 2026)
  * Transactions are now referenced by output hash instead of txid,
    matching navio-core: BLSCT transaction ids mutate when a block
