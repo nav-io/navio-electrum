@@ -1,3 +1,13 @@
+# Release 4.9.2 - (August 14, 2026)
+ * Fixed: on Android, a watch-only wallet created from a view key asked
+   for a password on first open even though none was set (unlocking
+   required leaving the field empty). Watch-only wallet files are now
+   encrypted at rest with the app's single password like other wallets
+   (only keystore encryption is skipped - there are no signing
+   secrets), and existing passwordless watch-only wallets are healed
+   automatically the next time they are opened.
+
+
 # Release 4.9.1 - (August 14, 2026)
  * Air-gapped signing hardening (adversarial audit of the QR protocol):
     - Proposals are now fully structurally validated on the offline
