@@ -196,7 +196,12 @@ class BlsctKeyStore(KeyStore):
 
     @classmethod
     def from_mnemonic(cls, mnemonic: str, passphrase: str = '') -> 'BlsctKeyStore':
-        entropy = bip39_mnemonic_to_entropy(mnemonic)
+        # accepts plain BIP39 or the 26-word Navio birthday variant. Keys
+        # derive from the 24-word base either way; the stored backup phrase
+        # keeps all 26 words so the displayed seed matches what the user
+        # wrote down (including the birthday).
+        from .navio_blsct import parse_birthday_mnemonic
+        _base, entropy, _birthday = parse_birthday_mnemonic(mnemonic)
         ks = cls.from_seed_hex(entropy.hex(), passphrase=passphrase)
         ks.mnemonic = ' '.join(mnemonic.split())
         return ks
@@ -1765,6 +1770,16 @@ def create_new_blsct_wallet(*, path, config, password=None, encrypt_file=True,
                                 passphrase=passphrase)
 
 
+def estimate_height_for_timestamp(ts: int, margin: int = 24 * 3600) -> int:
+    """Chain height at a unix timestamp minus a safety margin; 0 if
+    pre-genesis or the network has no genesis timestamp configured."""
+    from . import constants
+    genesis_ts = constants.net.GENESIS_TIMESTAMP
+    if not genesis_ts or ts <= genesis_ts:
+        return 0
+    return max(0, int((ts - genesis_ts - margin) // constants.net.BLOCK_INTERVAL))
+
+
 def estimate_height_for_date(date_str: str) -> int:
     """Estimate the chain height at a 'YYYY-MM-DD' date, with a one-day
     safety margin, for use as a scan starting point. Returns 0 on any
@@ -1830,7 +1845,15 @@ def restore_blsct_wallet_from_text(text: str, *, path, config, password=None,
     if len(text) == 64 and all(ch in '0123456789abcdefABCDEF' for ch in text):
         seed_hex = text.lower()
     else:
-        seed_hex = bip39_mnemonic_to_entropy(text).hex()
+        from .navio_blsct import parse_birthday_mnemonic
+        _base, entropy, birthday = parse_birthday_mnemonic(text)
+        seed_hex = entropy.hex()
+        if birthday and not creation_height:
+            creation_height = estimate_height_for_timestamp(birthday)
+        return _create_blsct_wallet(seed_hex, path=path, config=config,
+                                    password=password, encrypt_file=encrypt_file,
+                                    creation_height=creation_height,
+                                    passphrase=passphrase, mnemonic_text=text)
     return _create_blsct_wallet(seed_hex, path=path, config=config,
                                 password=password, encrypt_file=encrypt_file,
                                 creation_height=creation_height,
@@ -1861,7 +1884,8 @@ def _create_blsct_watch_wallet(view_key_hex, spend_pub_hex, *, path, config,
 
 
 def _create_blsct_wallet(seed_hex, *, path, config, password, encrypt_file,
-                         creation_height, passphrase: str = ''):
+                         creation_height, passphrase: str = '',
+                         mnemonic_text: str = None):
     from .storage import WalletStorage, StorageEncryptionVersion
     from .wallet_db import WalletDB
     from .wallet import Wallet
@@ -1872,6 +1896,9 @@ def _create_blsct_wallet(seed_hex, *, path, config, password, encrypt_file,
         storage.set_password(password, StorageEncryptionVersion.USER_PASSWORD)
     db = WalletDB('', storage=storage, upgrade=True)
     ks = BlsctKeyStore.from_seed_hex(seed_hex, passphrase=passphrase or '')
+    if mnemonic_text:
+        # keep the full backup phrase (e.g. 26-word birthday mnemonic)
+        ks.mnemonic = ' '.join(mnemonic_text.split())
     if password:
         ks.update_password(None, password)
     db.put('keystore', ks.dump())
