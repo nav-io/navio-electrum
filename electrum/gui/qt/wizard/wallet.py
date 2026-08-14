@@ -569,8 +569,10 @@ class WCBlsctCreateSeed(WalletWizardComponent):
     def create_seed(self):
         self.busy = True
         import os
-        from electrum.navio_blsct import bip39_entropy_to_mnemonic
-        self.seed = bip39_entropy_to_mnemonic(os.urandom(32))
+        import time as _time
+        from electrum.navio_blsct import birthday_mnemonic_from_entropy
+        # 26 words: 24 BIP39 + 2 encoding the wallet birthday
+        self.seed = birthday_mnemonic_from_entropy(os.urandom(32), int(_time.time()))
         self.seed_widget = SeedWidget(
             title=_('Your wallet generation seed is:'),
             seed=self.seed,
@@ -622,6 +624,12 @@ class WCBlsctHaveSeed(WalletWizardComponent):
         self.layout().addWidget(WWLabel(_('Enter your 24-word Navio seed phrase (or 64-character hex seed).')))
 
         def is_valid(text):
+            from electrum.navio_blsct import parse_birthday_mnemonic
+            try:
+                parse_birthday_mnemonic(' '.join(text.split()))
+                return True
+            except Exception:
+                pass
             from electrum.navio_blsct import is_bip39_mnemonic
             text = text.strip()
             if len(text) == 64 and all(c in '0123456789abcdefABCDEF' for c in text):

@@ -259,6 +259,63 @@ class TestAirgapFlow(ElectrumTestCase):
         built = full.mint_token(dest, 10, token='alpha')
         self.assertTrue(built.raw_hex)
 
+    def test_birthday_mnemonic(self):
+        """26-word Navio mnemonic: 24 BIP39 words + birthday + check word.
+        Same keys as the 24-word base; restore learns the scan height."""
+        import time
+        from electrum.navio_blsct import (birthday_mnemonic_from_entropy,
+                                          parse_birthday_mnemonic,
+                                          is_birthday_mnemonic,
+                                          BIRTHDAY_EPOCH, BIRTHDAY_WEEK)
+        ent = bytes(range(32))
+        ts = 1783000000
+        m = birthday_mnemonic_from_entropy(ent, ts)
+        self.assertEqual(len(m.split()), 26)
+        base, ent2, birthday = parse_birthday_mnemonic(m)
+        self.assertEqual(ent2, ent)
+        self.assertEqual(len(base.split()), 24)
+        # birthday floors to the week; never later than the true time
+        self.assertLessEqual(birthday, ts)
+        self.assertLess(ts - birthday, BIRTHDAY_WEEK)
+        self.assertEqual((birthday - BIRTHDAY_EPOCH) % BIRTHDAY_WEEK, 0)
+        self.assertTrue(is_birthday_mnemonic(m))
+        self.assertFalse(is_birthday_mnemonic(base))
+        # legacy 24 words parse with no birthday
+        self.assertIsNone(parse_birthday_mnemonic(base)[2])
+        # tampering with either extra word is detected
+        for i in (24, 25):
+            bad = m.split()
+            bad[i] = 'abandon' if bad[i] != 'abandon' else 'ability'
+            with self.assertRaises(ValueError):
+                parse_birthday_mnemonic(' '.join(bad))
+        # a different seed with the same birthday words is rejected
+        m_other = birthday_mnemonic_from_entropy(bytes(range(1, 33)), ts)
+        mixed = ' '.join(base.split() + m_other.split()[24:])
+        with self.assertRaises(ValueError):
+            parse_birthday_mnemonic(mixed)
+
+    def test_birthday_mnemonic_restore_sets_height(self):
+        import time
+        from electrum.navio_blsct import birthday_mnemonic_from_entropy
+        from electrum.blsct_wallet import (restore_blsct_wallet_from_text,
+                                           estimate_height_for_timestamp)
+        ts = int(time.time())
+        m = birthday_mnemonic_from_entropy(os.urandom(32), ts)
+        w = restore_blsct_wallet_from_text(
+            m, path=os.path.join(self.electrum_path, 'bday'),
+            config=self.config)['wallet']
+        h = w.blsct_sync.get('creation_height')
+        self.assertGreater(h, 0)
+        self.assertLessEqual(h, estimate_height_for_timestamp(ts))
+        # full 26-word phrase preserved for backup display
+        self.assertEqual(len(w.keystore.get_mnemonic(None).split()), 26)
+        # keys identical to the 24-word base restore
+        base = ' '.join(m.split()[:24])
+        w2 = restore_blsct_wallet_from_text(
+            base, path=os.path.join(self.electrum_path, 'bday2'),
+            config=self.config)['wallet']
+        self.assertEqual(w.get_view_key_str(), w2.get_view_key_str())
+
     def test_watch_wallet_cannot_sign(self):
         full, watch = self._make_wallets()
         dest = full.keyring.address(0, 5)

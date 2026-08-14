@@ -56,8 +56,12 @@ class QEBitcoin(QObject):
 
         async def co_gen_seed(seed_type, language):
             if seed_type == 'blsct':
-                from electrum.navio_blsct import bip39_entropy_to_mnemonic
-                self._generated_seed = bip39_entropy_to_mnemonic(os.urandom(32))
+                # 26-word Navio mnemonic: 24 BIP39 words + 2 words encoding
+                # the wallet birthday, so restores skip old blocks
+                import time as _time
+                from electrum.navio_blsct import birthday_mnemonic_from_entropy
+                self._generated_seed = birthday_mnemonic_from_entropy(
+                    os.urandom(32), int(_time.time()))
             else:
                 self._generated_seed = mnemonic.Mnemonic(language).make_seed(seed_type=seed_type)
             self._logger.debug('seed generated')
@@ -122,11 +126,16 @@ class QEBitcoin(QObject):
 
     @pyqtSlot(str, result=bool)
     def isBlsctSeed(self, text: str):
-        from electrum.navio_blsct import is_bip39_mnemonic
+        from electrum.navio_blsct import parse_birthday_mnemonic
         text = text.strip()
         if len(text) == 64 and all(c in '0123456789abcdefABCDEF' for c in text):
             return True
-        return is_bip39_mnemonic(' '.join(text.split()))
+        try:
+            # plain BIP39 or the 26-word Navio birthday variant
+            parse_birthday_mnemonic(' '.join(text.split()))
+            return True
+        except Exception:
+            return False
 
     @pyqtSlot(str, result=bool)
     def isAddressList(self, csv: str):

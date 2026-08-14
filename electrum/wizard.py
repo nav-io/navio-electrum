@@ -725,6 +725,13 @@ class NewWalletWizard(KeystoreWizard):
         elif len(seed_text) == 64 and all(c in '0123456789abcdefABCDEF' for c in seed_text):
             k = BlsctKeyStore.from_seed_hex(seed_text.lower(), passphrase=passphrase)
         else:
+            # 26-word Navio mnemonics carry the wallet birthday in two
+            # extra words; keys derive from the first 24 words only, and
+            # the keystore keeps the full phrase for backup display
+            from .navio_blsct import parse_birthday_mnemonic
+            _base, _entropy, birthday = parse_birthday_mnemonic(seed_text)
+            if birthday:
+                data.setdefault('_birthday_ts', birthday)
             k = BlsctKeyStore.from_mnemonic(seed_text, passphrase=passphrase)
         password = data.get('password') or None
         # watch-only wallets have no signing secrets, but the file itself
@@ -746,6 +753,9 @@ class NewWalletWizard(KeystoreWizard):
             network = getattr(self._daemon, 'network', None)
             if network:
                 creation_height = max(0, network.get_local_height() - 100)
+        elif data.get('_birthday_ts'):
+            from .blsct_wallet import estimate_height_for_timestamp
+            creation_height = estimate_height_for_timestamp(data['_birthday_ts'])
         elif data.get('creation_date'):
             from .blsct_wallet import estimate_height_for_date
             creation_height = estimate_height_for_date(data['creation_date'])

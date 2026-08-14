@@ -160,6 +160,80 @@ def is_bip39_mnemonic(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Navio birthday mnemonic v1
+#
+# A standard BIP39 24-word mnemonic followed by two extra words (26 total)
+# that encode the wallet's creation time ("birthday"), so a restore knows
+# where to start scanning without the user remembering a date:
+#
+#   word 25 (birthday word): index w = weeks elapsed since the fixed epoch
+#       2026-01-01 00:00 UTC (1767225600). 11 bits of week granularity
+#       cover ~39 years.
+#   word 26 (check word): the first 11 bits of
+#       HMAC-SHA256(key=entropy, msg=b'navio-birthday' || w as uint16 BE)
+#       This binds the birthday to this particular seed and catches typos
+#       in either extra word.
+#
+# Key derivation uses ONLY the first 24 words, so the derived wallet is
+# identical to a plain 24-word restore; the extra words are pure metadata.
+# Dropping them degrades gracefully to a legacy full-scan restore, and any
+# BIP39-compatible wallet can still import the first 24 words.
+#
+# The same format is implemented in navio-core (mnemonic/mnemonic.h) and
+# navio-sdk (src/crypto).
+# ---------------------------------------------------------------------------
+
+BIRTHDAY_EPOCH = 1767225600       # 2026-01-01 00:00 UTC
+BIRTHDAY_WEEK = 7 * 24 * 3600
+
+
+def _birthday_check_index(entropy: bytes, week: int) -> int:
+    import hmac as _hmac
+    mac = _hmac.new(entropy, b'navio-birthday' + week.to_bytes(2, 'big'),
+                    hashlib.sha256).digest()
+    return ((mac[0] << 8) | mac[1]) >> 5   # first 11 bits
+
+
+def birthday_mnemonic_from_entropy(entropy: bytes, timestamp: int) -> str:
+    """26-word Navio mnemonic: BIP39 24 words + birthday word + check word."""
+    words = bip39_entropy_to_mnemonic(entropy)
+    week = (int(timestamp) - BIRTHDAY_EPOCH) // BIRTHDAY_WEEK
+    if not (0 <= week < 2048):
+        raise ValueError('birthday outside representable range')
+    wordlist = _bip39_wordlist()
+    return '%s %s %s' % (words, wordlist[week],
+                         wordlist[_birthday_check_index(entropy, week)])
+
+
+def parse_birthday_mnemonic(text: str):
+    """Returns (words24, entropy, birthday_timestamp or None).
+    Accepts a plain BIP39 mnemonic (birthday None) or the 26-word Navio
+    variant. Raises ValueError if invalid."""
+    words = ' '.join(text.split()).split()
+    if len(words) == 26:
+        base = ' '.join(words[:24])
+        entropy = bip39_mnemonic_to_entropy(base)
+        wordlist = _bip39_wordlist()
+        try:
+            week = wordlist.index(words[24])
+            check = wordlist.index(words[25])
+        except ValueError:
+            raise ValueError('birthday words not in wordlist')
+        if check != _birthday_check_index(entropy, week):
+            raise ValueError('invalid birthday check word')
+        return base, entropy, BIRTHDAY_EPOCH + week * BIRTHDAY_WEEK
+    base = ' '.join(words)
+    return base, bip39_mnemonic_to_entropy(base), None
+
+
+def is_birthday_mnemonic(text: str) -> bool:
+    try:
+        return parse_birthday_mnemonic(text)[2] is not None
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Navio wire-format parsing (ported from electrumx DeserializerTxNavio)
 # ---------------------------------------------------------------------------
 
