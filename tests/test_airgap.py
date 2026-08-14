@@ -168,6 +168,33 @@ class TestAirgapFlow(ElectrumTestCase):
         c.add('NAV-AG/1/abcd1234/2/10/BBBB')
         self.assertFalse(c.is_complete())
 
+    def test_change_and_staking_inputs_accepted(self):
+        """Real wallets spend change (account -1) and unstaked
+        (account -2) outputs; validation must not reject them
+        (regression: v4.9.1 hardening only allowed account >= 0)."""
+        full, watch = self._make_wallets()
+        bk = full.keyring.spend_pub.serialize()
+        for i, (oh, acct) in enumerate([('44' * 32, -1), ('55' * 32, -2)]):
+            addr = full.keyring.address(acct, i)
+            d = {'tx_hash': 'bb' * 32, 'height': 200 + i,
+                 'amount': 5_0000_0000,
+                 'gamma': format(777 + i, '064x'), 'blinding_key': bk,
+                 'account': acct, 'addr_index': i, 'address': addr,
+                 'memo': '', 'token_id': None, 'staked': False,
+                 'delegation': None, 'spent_by': None, 'spent_height': None}
+            watch.blsct_outputs[oh] = dict(d)
+            full.blsct_outputs[oh] = dict(d)
+        # spend enough that the change/staking outputs must be selected
+        dest = full.keyring.address(0, 5)
+        proposal = watch.make_send_proposal([(dest, 18_0000_0000, '')])
+        accounts = {i[4] for i in proposal['ins']}
+        self.assertTrue({-1, -2} & accounts, accounts)
+        summary = full.check_airgap_proposal(proposal)
+        self.assertEqual(len(summary['outputs']), 1)
+        reply = full.sign_airgap_proposal(proposal)
+        txid, raw_hex = watch.check_airgap_reply(reply)
+        self.assertEqual(len(txid), 64)
+
     def test_watch_wallet_cannot_sign(self):
         full, watch = self._make_wallets()
         dest = full.keyring.address(0, 5)

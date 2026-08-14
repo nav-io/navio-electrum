@@ -56,6 +56,7 @@ MAX_PAYLOAD_SIZE = 4 * 1024 * 1024        # decompressed payload cap
 # sanity bounds for proposal input key indices (a hostile online device
 # could otherwise make the signer derive an absurd keypool)
 MAX_ACCOUNT = 2**31
+MIN_ACCOUNT = -2                          # change is -1, staking is -2
 MAX_ADDR_INDEX = 1_000_000
 
 
@@ -352,7 +353,7 @@ def proposal_to_plan(payload: dict):
             bad('input gamma')
         if not (isinstance(blind, bytes) and len(blind) == 48):
             bad('input blinding key')
-        if not (isinstance(account, int) and 0 <= account < MAX_ACCOUNT):
+        if not (isinstance(account, int) and MIN_ACCOUNT <= account < MAX_ACCOUNT):
             bad('input account')
         if not (isinstance(index, int) and 0 <= index < MAX_ADDR_INDEX):
             bad('input index')
