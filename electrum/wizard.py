@@ -727,16 +727,17 @@ class NewWalletWizard(KeystoreWizard):
         else:
             k = BlsctKeyStore.from_mnemonic(seed_text, passphrase=passphrase)
         password = data.get('password') or None
-        if k.is_watching_only():
-            password = None  # nothing secret to protect; view key must stay cleartext
+        # watch-only wallets have no signing secrets, but the file itself
+        # (view key, addresses, history) can still be encrypted at rest;
+        # the keystore stays cleartext so only storage encryption applies
         if data.get('encrypt') and password:
             storage.set_password(password, enc_version=StorageEncryptionVersion.USER_PASSWORD)
         db = WalletDB('', storage=storage, upgrade=True)
-        if password:
+        if password and not k.is_watching_only():
             k.update_password(None, password)
         db.put('keystore', k.dump())
         db.put('wallet_type', 'blsct')
-        db.set_keystore_encryption(bool(password))
+        db.set_keystore_encryption(bool(password) and not k.is_watching_only())
 
         # scan starting point: a brand-new wallet has no history before now,
         # and restores can give a creation date to skip scanning older blocks
