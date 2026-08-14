@@ -92,17 +92,47 @@ class QEQRParser(QObject):
             self.busyChanged.emit()
             return
 
-        async def co_parse_qr(frame):
-            image = frame.toImage()
-            self._parseQR(image)
+        # convert while the frame is still mapped: on desktop the camera
+        # recycles the frame buffer once this callback returns, so a deferred
+        # toImage() yields a null image (and a wedged scanner)
+        image = videoframe.toImage()
+        if image.isNull():
+            self._logger.debug('null image from video frame')
+            self._busy = False
+            self.busyChanged.emit()
+            return
 
-        asyncio.run_coroutine_threadsafe(co_parse_qr(videoframe), get_asyncio_loop())
+        async def co_parse_qr(image):
+            try:
+                self._parseQR(image)
+            except Exception:
+                self._logger.exception('QR parse failed')
+            finally:
+                # _parseQR resets busy on success; guarantee it on failure
+                # so one bad frame doesn't stop the scanner
+                if self._busy:
+                    self._busy = False
+                    self.busyChanged.emit()
+
+        asyncio.run_coroutine_threadsafe(co_parse_qr(image), get_asyncio_loop())
+
+    # decode resolution cap: zbar cost grows with pixel count (a 1552px
+    # desktop frame takes 400-700ms, losing the race against animated QR
+    # cycling); ~800px keeps dense fragments at >4px per module while
+    # decoding in well under 150ms
+    MAX_DECODE_SIZE = 800
 
     def _parseQR(self, image: QImage):
         self._size = min(image.width(), image.height())
         self.sizeChanged.emit()
         img_crop_rect = self._get_crop(image, self._size)
         frame_cropped = image.copy(img_crop_rect)
+        if frame_cropped.width() > self.MAX_DECODE_SIZE:
+            from PyQt6.QtCore import Qt
+            frame_cropped = frame_cropped.scaled(
+                self.MAX_DECODE_SIZE, self.MAX_DECODE_SIZE,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
 
         # Convert to Y800 / GREY FourCC (single 8-bit channel)
         frame_y800 = frame_cropped.convertToFormat(QImage.Format.Format_Grayscale8)
