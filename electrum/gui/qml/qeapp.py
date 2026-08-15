@@ -271,7 +271,7 @@ class QEAppController(BaseCrashReporter, QObject):
         it = jIntent.createChooser(sendIntent, cast('java.lang.CharSequence', jString(title)))
         jpythonActivity.startActivity(it)
 
-    updateAvailable = pyqtSignal([str], arguments=['version'])
+    updateAvailable = pyqtSignal([str, str], arguments=['version', 'changelog'])
 
     @pyqtSlot()
     def startUpdateCheck(self):
@@ -284,14 +284,12 @@ class QEAppController(BaseCrashReporter, QObject):
 
         async def check():
             try:
-                async with make_aiohttp_session(proxy=None, timeout=60) as session:
-                    url = 'https://api.github.com/repos/nav-io/navio-electrum/releases/latest'
-                    async with session.get(url) as result:
-                        release = await result.json(content_type=None)
-                latest = release['tag_name'].lstrip('vV').strip()
+                from electrum.util import fetch_navio_update_info
+                latest, changelog = await fetch_navio_update_info(
+                    proxy=None, timeout=60)
                 if StrictVersion(latest) > StrictVersion(ELECTRUM_VERSION):
                     self.logger.info(f'update available: {latest}')
-                    self.updateAvailable.emit(latest)
+                    self.updateAvailable.emit(latest, changelog)
             except Exception as e:
                 self.logger.info(f'update check failed: {e!r}')
 

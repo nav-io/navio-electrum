@@ -215,7 +215,6 @@ class TokensDialog(WindowModalDialog):
         token_combo = None
         keys = list(tokens.keys())
         if len(keys) > 1:
-            from PyQt6.QtWidgets import QComboBox
             token_combo = QComboBox()
             for k in keys:
                 e = tokens[k]
