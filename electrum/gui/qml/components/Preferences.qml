@@ -219,24 +219,6 @@ Pane {
                         Layout.columnSpan: 2
                         Layout.fillWidth: true
                         spacing: 0
-                        Switch {
-                            id: psbtNostr
-                            onCheckedChanged: {
-                                if (activeFocus)
-                                    AppController.setPluginEnabled('psbt_nostr', checked)
-                            }
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: qsTr('Nostr Cosigner')
-                            wrapMode: Text.Wrap
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.columnSpan: 2
-                        Layout.fillWidth: true
-                        spacing: 0
                         enabled: AppController.isAndroid()
                         Switch {
                             id: setMaxBrightnessOnQrDisplay
@@ -437,6 +419,5 @@ Pane {
         disableScreenshots.checked = !Config.alwaysAllowScreenshots && AppController.isAndroid()
         setMaxBrightnessOnQrDisplay.checked = Config.setMaxBrightnessOnQrDisplay && AppController.isAndroid()
         syncLabels.checked = AppController.isPluginEnabled('labels')
-        psbtNostr.checked = AppController.isPluginEnabled('psbt_nostr')
     }
 }
