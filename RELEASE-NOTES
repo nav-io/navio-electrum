@@ -1,3 +1,17 @@
+# Release 4.9.6 - (August 15, 2026)
+ * Android: release APKs are now signed with a stable release key.
+   Previous releases were debug-signed with a key that changed on
+   every build, which forced a full uninstall/reinstall to upgrade.
+   IMPORTANT: upgrading TO this version still requires one final
+   uninstall/reinstall; from this version on, updates install in
+   place.
+ * Update notification now shows the full changelog of every release
+   since the version you are running, on both desktop and Android.
+ * Removed the unused Nostr settings from the interface (network
+   dialog tab, cosigner plugin toggle); these upstream features do
+   not apply to Navio wallets.
+
+
 # Release 4.9.5 - (August 14, 2026)
  * Birthday seed phrases: new wallets get 26 words - the standard
    BIP39 24 words plus two extra words encoding the wallet's creation
