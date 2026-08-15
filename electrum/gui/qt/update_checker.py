@@ -6,7 +6,8 @@ import asyncio
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtWidgets import QVBoxLayout, QLabel, QProgressBar, QHBoxLayout, QPushButton, QDialog
+from PyQt6.QtWidgets import (QVBoxLayout, QLabel, QProgressBar, QHBoxLayout,
+                             QPushButton, QDialog, QTextBrowser)
 
 from electrum import version
 from electrum.i18n import _
@@ -37,6 +38,13 @@ class UpdateCheck(QDialog, Logger):
         self.detail_label.setOpenExternalLinks(True)
         self.content.addWidget(self.detail_label)
 
+        # full release notes of every version since the running one
+        self.changelog_view = QTextBrowser()
+        self.changelog_view.setOpenExternalLinks(True)
+        self.changelog_view.setMinimumHeight(260)
+        self.changelog_view.hide()
+        self.content.addWidget(self.changelog_view)
+
         self.pb = QProgressBar()
         self.pb.setMaximum(0)
         self.pb.setMinimum(0)
@@ -61,8 +69,9 @@ class UpdateCheck(QDialog, Logger):
         self.setLayout(self.content)
         self.show()
 
-    def on_version_retrieved(self, version):
-        self.update_view(version)
+    def on_version_retrieved(self, info):
+        version, changelog = info
+        self.update_view(version, changelog)
 
     def on_retrieval_failed(self):
         self.heading_label.setText('<h2>' + _("Update check failed") + '</h2>')
@@ -73,7 +82,7 @@ class UpdateCheck(QDialog, Logger):
     def is_newer(latest_version):
         return latest_version > StrictVersion(version.ELECTRUM_VERSION)
 
-    def update_view(self, latest_version=None):
+    def update_view(self, latest_version=None, changelog: str = ''):
         if latest_version:
             self.pb.hide()
             self.latest_version_label.setText(_("Latest version: {}").format(latest_version))
@@ -81,6 +90,9 @@ class UpdateCheck(QDialog, Logger):
                 self.heading_label.setText('<h2>' + _("There is a new update available") + '</h2>')
                 url = "<a href='{u}'>{u}</a>".format(u=UpdateCheck.download_url)
                 self.detail_label.setText(_("You can download the new version from {}.").format(url))
+                if changelog:
+                    self.changelog_view.setMarkdown(changelog)
+                    self.changelog_view.show()
             else:
                 self.heading_label.setText('<h2>' + _("Already up to date") + '</h2>')
                 self.detail_label.setText(_("You are already on the latest version of Navio Electrum."))
@@ -102,14 +114,11 @@ class UpdateCheckThread(QThread, Logger):
     async def get_update_info(self):
         # note: Use long timeout here as it is not critical that we get a response fast,
         #       and it's bad not to get an update notification just because we did not wait enough.
-        async with make_aiohttp_session(proxy=self.network.proxy, timeout=120) as session:
-            async with session.get(UpdateCheck.url) as result:
-                release = await result.json(content_type=None)
-                # example: {"tag_name": "v4.8.5", ...}
-                tag = release['tag_name']
-                version_num = tag.lstrip('vV').strip()
-                self.logger.info(f"latest github release: {version_num}")
-                return StrictVersion(version_num)
+        from electrum.util import fetch_navio_update_info
+        latest, changelog = await fetch_navio_update_info(
+            proxy=self.network.proxy, timeout=120)
+        self.logger.info(f"latest github release: {latest}")
+        return StrictVersion(latest), changelog
 
     def run(self):
         if not self.network:

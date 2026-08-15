@@ -1394,6 +1394,38 @@ def _make_aiohttp_session(proxy: Optional['ProxySettings'], headers=None, timeou
     return aiohttp.ClientSession(headers=headers, timeout=timeout, connector=connector)
 
 
+async def fetch_navio_update_info(*, proxy=None, timeout=120):
+    """Query GitHub for releases of nav-io/navio-electrum newer than the
+    running version. Returns (latest_version_str, changelog_markdown) where
+    the changelog concatenates the release notes of every release since the
+    current one, newest first. changelog is '' when already up to date."""
+    from .version import ELECTRUM_VERSION
+    from ._vendor.distutils.version import StrictVersion
+    url = 'https://api.github.com/repos/nav-io/navio-electrum/releases?per_page=30'
+    async with make_aiohttp_session(proxy=proxy, timeout=timeout) as session:
+        async with session.get(url) as result:
+            releases = await result.json(content_type=None)
+    current = StrictVersion(ELECTRUM_VERSION)
+    newer = []
+    for rel in releases:
+        if rel.get('draft') or rel.get('prerelease'):
+            continue
+        try:
+            ver = StrictVersion(rel.get('tag_name', '').lstrip('vV').strip())
+        except Exception:
+            continue
+        if ver > current:
+            newer.append((ver, rel))
+    if not newer:
+        return str(current), ''
+    newer.sort(key=lambda x: x[0], reverse=True)
+    parts = []
+    for ver, rel in newer:
+        body = (rel.get('body') or '').strip()
+        parts.append(f"# {rel.get('name') or rel.get('tag_name')}\n\n{body}")
+    return str(newer[0][0]), '\n\n---\n\n'.join(parts)
+
+
 @contextlib.asynccontextmanager
 async def make_aiohttp_session(proxy: Optional['ProxySettings'], headers=None, timeout=None):
     """

@@ -466,11 +466,21 @@ ApplicationWindow
         width: parent.width
     }
 
+    Component {
+        id: updateDialog
+        UpdateDialog {}
+    }
+
     Connections {
         target: AppController
-        function onUpdateAvailable(version) {
+        function onUpdateAvailable(version, changelog) {
             infobanner.show(qsTr('Navio Electrum %1 is available').arg(version), function() {
-                Qt.openUrlExternally('https://github.com/nav-io/navio-electrum/releases/latest')
+                if (changelog) {
+                    var d = updateDialog.createObject(app, {version: version, changelog: changelog})
+                    d.open()
+                } else {
+                    Qt.openUrlExternally('https://github.com/nav-io/navio-electrum/releases/latest')
+                }
             })
         }
     }
