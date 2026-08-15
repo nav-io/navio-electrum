@@ -60,9 +60,9 @@ class NetworkDialog(QDialog, QtEventListener):
         self.tabs = tabs = QTabWidget()
         self._blockchain_tab = ServerWidget(network)
         self._proxy_tab = ProxyWidget(network)
-        self._nostr_tab = NostrWidget(network)
+        # no Nostr tab: the nostr-backed features (Lightning swaps, NWC,
+        # PSBT cosigning) do not apply to Navio wallets
         tabs.addTab(self._blockchain_tab, _('Server'))
-        tabs.addTab(self._nostr_tab, _('Nostr'))
         tabs.addTab(self._proxy_tab, _('Proxy'))
         vbox = QVBoxLayout(self)
         vbox.addWidget(self.tabs)
