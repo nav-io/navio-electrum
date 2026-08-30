@@ -47,6 +47,12 @@ info "Installing hardware wallet requirements..."
 $WINE_PYTHON -m pip install --no-build-isolation --no-dependencies --no-warn-script-location \
     --no-binary :all: --only-binary cffi,cryptography,hidapi \
     --cache-dir "$WINE_PIP_CACHE_DIR" -r "$CONTRIB"/deterministic-build/requirements-hw.txt
+info "Installing navio-blsct (confidential transactions)..."
+# win_amd64 cp312 wheel from PyPI; provides the BLSCT crypto the wallet needs.
+# No compiler in the wine prefix, so a binary wheel is mandatory.
+$WINE_PYTHON -m pip install --no-build-isolation --no-dependencies --no-warn-script-location \
+    --only-binary :all: \
+    --cache-dir "$WINE_PIP_CACHE_DIR" "navio-blsct>=0.0.38"
 
 pushd "$PROJECT_ROOT"
 # see https://github.com/pypa/pip/issues/2195 -- pip makes a copy of the entire directory

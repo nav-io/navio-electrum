@@ -28,6 +28,17 @@ hiddenimports += collect_submodules(f"{PYPKG}.plugins")
 binaries = []
 # Workaround for "Retro Look":
 binaries += [b for b in collect_dynamic_libs('PyQt6') if 'qwindowsvista' in b[0]]
+# navio-blsct: the win_amd64 wheel is delvewheel-repaired, i.e. the MSVC C++
+# runtime its extension needs ships as navio_blsct.libs/msvcp140-<hash>.dll
+# next to the package, and blsct/__init__.py registers that directory (relative
+# to itself) as a DLL search path. PyInstaller does not pick the directory up
+# on its own (not a package), so mirror it into the bundle at the same place.
+import glob
+import importlib.util
+_blsct_spec = importlib.util.find_spec('blsct')
+if _blsct_spec is not None and _blsct_spec.origin:
+    _blsct_libs = os.path.join(os.path.dirname(os.path.dirname(_blsct_spec.origin)), 'navio_blsct.libs')
+    binaries += [(f, 'navio_blsct.libs') for f in glob.glob(os.path.join(_blsct_libs, '*.dll'))]
 # add libsecp256k1, libusb, etc:
 binaries += [(f"{PROJECT_ROOT}/{PYPKG}/*.dll", '.')]
 
