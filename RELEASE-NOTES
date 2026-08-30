@@ -1,3 +1,11 @@
+# Release 4.9.7 - (August 30, 2026)
+ * Windows: confidential (BLSCT) wallets work again. The Windows build
+   shipped without the navio-blsct module, so creating or opening a
+   BLSCT wallet failed with "No module named 'blsct'". navio-blsct now
+   publishes a Windows wheel (0.0.38.post1) and the installer bundles
+   it together with the MSVC C++ runtime it needs.
+
+
 # Release 4.9.6 - (August 15, 2026)
  * Android: release APKs are now signed with a stable release key.
    Previous releases were debug-signed with a key that changed on
