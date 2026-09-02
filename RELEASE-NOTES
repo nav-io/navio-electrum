@@ -1,3 +1,12 @@
+# Release 4.9.8 - (September 2, 2026)
+ * BLSCT range-proof v2: at or above each network's activation height,
+   confidential transactions are now built under the v2 range-proof
+   transcript that post-activation nodes require (mainnet activated
+   September 2, 2026 at block 42500). Below the activation height wallets
+   keep building v1 transactions, so sends work on both sides of the
+   upgrade. Bundles navio-blsct 0.0.39, which carries the v2 proof code.
+
+
 # Release 4.9.7 - (August 30, 2026)
  * Windows: confidential (BLSCT) wallets work again. The Windows build
    shipped without the navio-blsct module, so creating or opening a
