@@ -208,7 +208,7 @@ python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: 
 
 info "Installing navio-blsct (confidential transactions)..."
 python3 -m pip install --cache-dir "$PIP_CACHE_DIR" --no-warn-script-location \
-    "navio-blsct>=0.0.38" || fail "Could not install navio-blsct"
+    "navio-blsct>=0.0.39" || fail "Could not install navio-blsct"
 
 info "Building $PACKAGE..."
 python3 -m pip install --no-build-isolation --no-dependencies \

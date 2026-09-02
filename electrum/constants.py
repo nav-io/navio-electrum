@@ -71,6 +71,12 @@ class AbstractNet:
     ADDRTYPE_P2SH: int
     SEGWIT_HRP: str
     BLSCT_HRP: str = "nav"
+    # Consensus activation height for the BLSCT range-proof v2 transcript. At or
+    # above this height a BLSCT transaction must build its outputs under the v2
+    # transcript and carry BLSCT_PROOF_V2_MARKER, else the node rejects it. The
+    # default is dormant (INT_MAX, mirroring the C int used by the node); nets
+    # with an armed height override it below.
+    BLSCT_PROOF_V2_HEIGHT: int = 2**31 - 1
     GENESIS_TIMESTAMP: int = 0   # unix time of block 0; used to estimate a height from a date
     BLOCK_INTERVAL: int = 120    # target seconds per block
     BOLT11_HRP: str
@@ -156,6 +162,7 @@ class BitcoinMainnet(AbstractNet):
     ADDRTYPE_P2SH = 85
     SEGWIT_HRP = "nv"
     BLSCT_HRP = "nav"
+    BLSCT_PROOF_V2_HEIGHT = 42500  # flag day ~2026-09-02 21:00 Berlin; see navio-core chainparams
     BOLT11_HRP = SEGWIT_HRP
     GENESIS = "0af3c23ae1ac4910693b7187ac61641d16d1cf49cba7acf8649d48e831d86b13"
     GENESIS_TIMESTAMP = 1782910800
@@ -200,6 +207,7 @@ class BitcoinTestnet(AbstractNet):
     ADDRTYPE_P2SH = 196
     SEGWIT_HRP = "tnv"
     BLSCT_HRP = "tnv"
+    BLSCT_PROOF_V2_HEIGHT = 70600
     BOLT11_HRP = SEGWIT_HRP
     GENESIS = "7a04d0211de9194390c69ea0ab0d67e3c18a00c5a0b4aae65a4b5cd919e5c3e6"
     GENESIS_TIMESTAMP = 1777481682
@@ -240,6 +248,7 @@ class BitcoinRegtest(BitcoinTestnet):
 
     NET_NAME = "regtest"
     SEGWIT_HRP = "bcrt"
+    BLSCT_PROOF_V2_HEIGHT = 0  # armed from genesis on regtest
     BOLT11_HRP = SEGWIT_HRP
     GENESIS = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
     LN_DNS_SEEDS = []

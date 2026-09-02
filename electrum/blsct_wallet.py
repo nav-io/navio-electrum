@@ -16,6 +16,7 @@ from typing import Optional, Dict, Tuple, List, Sequence, TYPE_CHECKING
 from aiorpcx import run_in_thread, ignore_after
 
 from . import util
+from . import constants
 from .i18n import _
 from .util import (NetworkJobOnDefaultServer, NotEnoughFunds,
                    UserFacingException, OldTaskGroup)
@@ -552,7 +553,8 @@ class Blsct_Wallet(Abstract_Wallet):
         utxos, recs, _fee = self._plan_token_send(token_id_hex, recipients)
         keyring = self._spending_keyring(password)
         return navio_blsct.build_signed_tx(
-            keyring, utxos, recs, fixed_fee=fixed_fee)
+            keyring, utxos, recs, fixed_fee=fixed_fee,
+            transcript_v2=self._wants_transcript_v2())
 
     def _plan_token_send(self, token_id_hex: str,
                          recipients: Sequence[Tuple[str, int, str]]):
@@ -812,6 +814,14 @@ class Blsct_Wallet(Abstract_Wallet):
             })
         items.sort(key=lambda x: (x['height'] if x['height'] > 0 else 10**9))
         return items
+
+    def _wants_transcript_v2(self) -> bool:
+        """True when the next block is at or above the network's BLSCT
+        range-proof v2 activation height, so newly built outputs must use the
+        v2 transcript and stamp BLSCT_PROOF_V2_MARKER. Below the gate (and on
+        nets where it is dormant) this is False and we keep emitting v1."""
+        local_height = self.network.get_local_height() if self.network else 0
+        return (local_height + 1) >= constants.net.BLSCT_PROOF_V2_HEIGHT
 
     def get_detailed_history(self, from_timestamp=None, to_timestamp=None,
                              fx=None, show_addresses=False,
@@ -1146,7 +1156,8 @@ class Blsct_Wallet(Abstract_Wallet):
         built = navio_blsct.build_signed_tx(
             keyring, utxos, recs,
             fixed_fee=fixed_fee,
-            subtract_fee_from_amount=subtract_fee_from_amount)
+            subtract_fee_from_amount=subtract_fee_from_amount,
+            transcript_v2=self._wants_transcript_v2())
         return built
 
     # ---------------------------------------------------------------- staking
@@ -1224,7 +1235,8 @@ class Blsct_Wallet(Abstract_Wallet):
             amount, delegation=delegation, consolidate=consolidate)
         keyring = self._spending_keyring(password)
         return navio_blsct.build_signed_tx(keyring, utxos, recs,
-                                           fixed_fee=fixed_fee)
+                                           fixed_fee=fixed_fee,
+                                           transcript_v2=self._wants_transcript_v2())
 
     def _plan_stake(self, amount: int, *, delegation, consolidate: bool = True):
         staked_inputs = []
@@ -1338,7 +1350,8 @@ class Blsct_Wallet(Abstract_Wallet):
         keyring = self._spending_keyring(password)
         utxos = [self._coin_to_spendable(u) for u in selected]
         return navio_blsct.build_signed_tx(keyring, utxos, recipients,
-                                           fixed_fee=fixed_fee)
+                                           fixed_fee=fixed_fee,
+                                           transcript_v2=self._wants_transcript_v2())
 
     def _plan_unstake(self, amount: Optional[int] = None, *,
                       delegate_key_hex: Optional[str] = None):
@@ -1478,7 +1491,8 @@ class Blsct_Wallet(Abstract_Wallet):
         keyring = self._spending_keyring(password)
         built = navio_blsct.build_signed_tx(
             keyring, utxos, recipients, fixed_fee=fee,
-            subtract_fee_from_amount=subtract)
+            subtract_fee_from_amount=subtract,
+            transcript_v2=self._wants_transcript_v2())
         return airgap.make_reply_payload(
             **self._airgap_env(), txid_hex=built.txid, raw_hex=built.raw_hex)
 
