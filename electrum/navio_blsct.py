@@ -733,6 +733,7 @@ def build_signed_tx(keyring: BlsctKeyRing,
                     change_address_pair: Tuple[int, int] = (CHANGE_ACCOUNT, 0),
                     fixed_fee: Optional[int] = None,
                     subtract_fee_from_amount: bool = False,
+                    transcript_v2: bool = False,
                     ) -> BuiltTx:
     """Build and sign a BLSCT transaction.
 
@@ -811,6 +812,11 @@ def build_signed_tx(keyring: BlsctKeyRing,
                                 _token_id_obj(b, rec.token_id_hex),
                                 rec.output_type, rec.min_stake,
                                 False, blinding_key)
+                # At or above the transcript-v2 activation height every output
+                # must be built under v2; any v2 output makes the signed tx
+                # carry BLSCT_PROOF_V2_MARKER, so flag them all.
+                if transcript_v2:
+                    b.set_tx_out_transcript_v2(txout.value(), True)
                 rv = b.build_unsigned_output(txout.value())
                 if int(rv.result) != 0:
                     b.free_obj(rv)
