@@ -42,6 +42,8 @@ DEFAULT_KEYPOOL = 20
 GAP_LIMIT = 20
 # how many recent block hashes to retain for reorg detection
 BLOCK_HASH_RETENTION = 500
+# memo navio-core stamps on the coinbase reward output (node/miner.cpp)
+REWARD_MEMO = 'Reward'
 
 
 class BlsctKeyStore(KeyStore):
@@ -770,7 +772,10 @@ class Blsct_Wallet(Abstract_Wallet):
 
     def get_history_items(self) -> List[dict]:
         """Synthesize a wallet history from the recorded outputs.
-        One item per txid: received minus spent."""
+        One item per txid: received minus spent. Block rewards are the
+        exception: a received output carrying the coinbase's "Reward" memo
+        is always its own item, even when the block aggregated the reward
+        with other outputs of ours under the same txid."""
         events = {}
         with self._blsct_lock:
             for ohash, d in self.blsct_outputs.items():
@@ -778,7 +783,8 @@ class Blsct_Wallet(Abstract_Wallet):
                     continue  # token amounts are not NAV; shown in the tokens view
                 rtx = d.get('tx_hash')
                 if rtx:
-                    ev = events.setdefault(rtx, {'height': d.get('height', 0), 'delta': 0, 'memos': [],
+                    key = (rtx, 'reward') if d.get('memo') == REWARD_MEMO else rtx
+                    ev = events.setdefault(key, {'height': d.get('height', 0), 'delta': 0, 'memos': [],
                                                  'recv_hashes': [], 'spent_ref': None})
                     ev['delta'] += d['amount']
                     ev['height'] = d.get('height', 0)
@@ -794,18 +800,27 @@ class Blsct_Wallet(Abstract_Wallet):
                     if d.get('spent_ref') and not ev['spent_ref']:
                         ev['spent_ref'] = d['spent_ref']
         items = []
-        for txid, ev in events.items():
+        used_refs = set()
+        # reward items first so they keep their own output hash as reference
+        ordered = sorted(events.items(), key=lambda kv: not isinstance(kv[0], tuple))
+        for key, ev in ordered:
+            txid = key[0] if isinstance(key, tuple) else key
             # user-facing reference: an output hash, not the txid. BLSCT
             # txids mutate when a block aggregates transactions; output
             # hashes are stable, and navio-core references transactions
             # the same way. Outgoing: the destination output hash recorded
             # when the tx was built/seen; incoming: our received output.
+            candidates = []
             if ev['delta'] < 0 and ev['spent_ref']:
-                ref = ev['spent_ref']
-            elif ev['recv_hashes']:
-                ref = sorted(ev['recv_hashes'])[0]
-            else:
-                ref = ev['spent_ref'] or txid
+                candidates.append(ev['spent_ref'])
+            candidates.extend(sorted(ev['recv_hashes']))
+            if ev['spent_ref']:
+                candidates.append(ev['spent_ref'])
+            candidates.append(txid)
+            # the reward item and the rest of the same aggregated tx must
+            # not share a reference (the history view is keyed by it)
+            ref = next((c for c in candidates if c not in used_refs), txid + ':rest')
+            used_refs.add(ref)
             items.append({
                 'txid': ref,
                 'height': ev['height'],

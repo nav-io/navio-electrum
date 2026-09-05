@@ -322,3 +322,63 @@ class TestAirgapFlow(ElectrumTestCase):
         proposal = watch.make_send_proposal([(dest, 1_0000_0000, '')])
         with self.assertRaises(UserFacingException):
             watch.sign_airgap_proposal(proposal)
+
+
+class TestBlsctHistoryRewardSplit(ElectrumTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.config = SimpleConfig({'electrum_path': self.electrum_path})
+
+    def _wallet(self):
+        from electrum.blsct_wallet import restore_blsct_wallet_from_text
+        return restore_blsct_wallet_from_text(
+            'cd' * 32, path=os.path.join(self.electrum_path, 'w'),
+            config=self.config)['wallet']
+
+    def _out(self, w, i, amount, memo, tx_hash, height=500, spent_by=None,
+             spent_ref=None):
+        return {'tx_hash': tx_hash, 'height': height, 'amount': amount,
+                'gamma': format(777 + i, '064x'),
+                'blinding_key': w.keyring.spend_pub.serialize(),
+                'account': 0, 'addr_index': i,
+                'address': w.get_receiving_addresses()[i], 'memo': memo,
+                'token_id': None, 'staked': False, 'delegation': None,
+                'spent_by': spent_by, 'spent_height': height if spent_by else None,
+                'spent_ref': spent_ref}
+
+    def test_reward_is_its_own_item_in_aggregated_tx(self):
+        """A block aggregates the reward with our other outputs under one
+        txid: the reward must still be a separate history item."""
+        w = self._wallet()
+        agg = 'ee' * 32
+        # funding output spent by the aggregated tx (our own send + change)
+        w.blsct_outputs['11' * 32] = self._out(
+            w, 0, 5_0000_0000, '', 'aa' * 32, height=100,
+            spent_by=agg, spent_ref='33' * 32)
+        w.blsct_outputs['22' * 32] = self._out(w, 1, 4_9500_0000, 'Change', agg)
+        w.blsct_outputs['33' * 32] = self._out(w, 2, 8_0000_0000, 'Reward', agg)
+        items = {it['txid']: it for it in w.get_history_items()}
+        self.assertEqual(len(items), 3, items)
+        reward = items['33' * 32]
+        self.assertEqual(reward['amount_sat'], 8_0000_0000)
+        self.assertEqual(reward['memos'], ['Reward'])
+        rest = [it for k, it in items.items() if k not in ('33' * 32, '11' * 32)]
+        self.assertEqual(len(rest), 1)
+        self.assertEqual(rest[0]['amount_sat'], -500_0000)
+        self.assertEqual(rest[0]['memos'], ['Change'])
+        # spent_ref collided with the reward's hash: the rest item still
+        # gets a distinct, stable reference
+        self.assertEqual(rest[0]['txid'], '22' * 32)
+        # the wallet view keys by reference, so both rows survive
+        full = w.get_full_history()
+        self.assertIn('33' * 32, full)
+        self.assertIn('22' * 32, full)
+
+    def test_plain_reward_unchanged(self):
+        w = self._wallet()
+        w.blsct_outputs['44' * 32] = self._out(w, 0, 8_0000_0000, 'Reward', 'bb' * 32)
+        items = w.get_history_items()
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['txid'], '44' * 32)
+        self.assertEqual(items[0]['amount_sat'], 8_0000_0000)
