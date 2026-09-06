@@ -859,6 +859,7 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
             'frozen': p_bal.frozen,
             'lightning': int(p_bal.lightning),
             'f_lightning': int(p_bal.lightning_frozen),
+            'staked': p_bal.staked,
             'total': int(p_bal.total())
         }
 

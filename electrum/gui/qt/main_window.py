@@ -101,7 +101,7 @@ from .confirm_tx_dialog import ConfirmTxDialog, TxEditorContext
 from .rbf_dialog import BumpFeeDialog, DSCancelDialog
 from .qrreader import scan_qrcode_from_camera
 from .swap_dialog import SwapDialog, InvalidSwapParameters
-from .balance_dialog import (BalanceToolButton, COLOR_FROZEN, COLOR_UNMATURED, COLOR_UNCONFIRMED, COLOR_CONFIRMED,
+from .balance_dialog import (BalanceToolButton, COLOR_FROZEN, COLOR_UNMATURED, COLOR_UNCONFIRMED, COLOR_CONFIRMED, COLOR_STAKED,
                              COLOR_LIGHTNING, COLOR_FROZEN_LIGHTNING)
 
 if TYPE_CHECKING:
@@ -1053,6 +1053,7 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
                         (_('On-chain'), COLOR_CONFIRMED, p_bal.confirmed),
                         (_('Lightning'), COLOR_LIGHTNING, p_bal.lightning),
                         (_('Lightning frozen'), COLOR_FROZEN_LIGHTNING, p_bal.lightning_frozen),
+                        (_('Staked'), COLOR_STAKED, p_bal.staked),
                     ],
                     warning = self.wallet.is_low_reserve(),
                 )
@@ -1062,6 +1063,11 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
                 if self.fx.is_enabled():
                     balance_text += self.fx.get_fiat_status_text(balance,
                         self.base_unit(), self.get_decimal_point()) or ''
+                if p_bal.staked:
+                    unstaked = balance - p_bal.staked
+                    balance_text += "  |  %s: %s  %s: %s" % (
+                        _("Staked"), self.format_amount_and_units(p_bal.staked),
+                        _("Unstaked"), self.format_amount_and_units(unstaked))
                 if not self.network.proxy or not self.network.proxy.enabled:
                     icon = read_QIcon("status_connected%s.png"%fork_str)
                 else:

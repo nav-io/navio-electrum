@@ -385,9 +385,11 @@ class PiechartBalance:
     frozen: int       # on-chain
     lightning: Decimal
     lightning_frozen: Decimal
+    staked: int = 0   # on-chain, locked in staked commitments (BLSCT wallets)
 
     def total(self) -> Decimal:
-        return self.confirmed + self.unconfirmed + self.unmatured + self.frozen + self.lightning + self.lightning_frozen
+        return (self.confirmed + self.unconfirmed + self.unmatured + self.frozen
+                + self.lightning + self.lightning_frozen + self.staked)
 
 
 class Abstract_Wallet(ABC, Logger, EventListener):

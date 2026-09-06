@@ -17,13 +17,14 @@ from aiorpcx import run_in_thread, ignore_after
 
 from . import util
 from . import constants
+from .bitcoin import COINBASE_MATURITY
 from .i18n import _
 from .util import (NetworkJobOnDefaultServer, NotEnoughFunds,
                    UserFacingException, OldTaskGroup)
 from .crypto import pw_encode, pw_decode
 from .keystore import KeyStore
 from .logging import Logger
-from .wallet import (Abstract_Wallet, register_wallet_type,
+from .wallet import (Abstract_Wallet, register_wallet_type, PiechartBalance,
                      register_constructor)
 from . import navio_blsct
 from . import stake_delegation
@@ -42,8 +43,11 @@ DEFAULT_KEYPOOL = 20
 GAP_LIMIT = 20
 # how many recent block hashes to retain for reorg detection
 BLOCK_HASH_RETENTION = 500
-# memo navio-core stamps on the coinbase reward output (node/miner.cpp)
+# memos navio-core stamps on coinbase outputs (node/miner.cpp): the reward
+# and the optional operator-fee share
 REWARD_MEMO = 'Reward'
+OPERATOR_FEE_MEMO = 'Operator Fee'
+COINBASE_MEMOS = (REWARD_MEMO, OPERATOR_FEE_MEMO)
 
 
 class BlsctKeyStore(KeyStore):
@@ -256,6 +260,7 @@ class BlsctUtxo:
             'address_index': self.d.get('addr_index'),
             'token_id': self.d.get('token_id'),
             'staked': bool(self.d.get('staked')),
+            'coinbase': bool(self.d.get('coinbase')),
             'delegation': self.d.get('delegation'),
         }
 
@@ -437,19 +442,41 @@ class Blsct_Wallet(Abstract_Wallet):
 
     # --------------------------------------------------------------- balance
 
+    @staticmethod
+    def _is_coinbase_output(d: dict) -> bool:
+        # outputs recorded before the flag existed are recognised by the
+        # memo navio-core stamps on coinbase outputs
+        return bool(d.get('coinbase')) or d.get('memo') in COINBASE_MEMOS
+
+    def _is_mature(self, d: dict, local_height: Optional[int] = None) -> bool:
+        """Consensus lets a coinbase output be spent once the spending
+        block is COINBASE_MATURITY blocks past it (bad-txns-premature-spend-
+        of-coinbase otherwise). A tx built now lands at local_height + 1."""
+        if not self._is_coinbase_output(d):
+            return True
+        height = d.get('height', 0)
+        if height <= 0:
+            return False
+        if local_height is None:
+            local_height = self.network.get_local_height() if self.network else 0
+        return local_height + 1 - height >= COINBASE_MATURITY
+
     def get_balance(self, **kwargs) -> Tuple[int, int, int]:
-        confirmed = unconfirmed = 0
+        confirmed = unconfirmed = unmatured = 0
+        local_height = self.network.get_local_height() if self.network else 0
         with self._blsct_lock:
             for d in self.blsct_outputs.values():
                 if d.get('spent_by'):
                     continue
                 if d.get('token_id'):
                     continue  # token balances tracked separately
-                if d.get('height', 0) > 0:
-                    confirmed += d['amount']
-                else:
+                if d.get('height', 0) <= 0:
                     unconfirmed += d['amount']
-        return confirmed, unconfirmed, 0
+                elif not self._is_mature(d, local_height):
+                    unmatured += d['amount']
+                else:
+                    confirmed += d['amount']
+        return confirmed, unconfirmed, unmatured
 
     def get_addr_balance(self, address):
         pair = self._addr_to_pair.get(address)
@@ -488,9 +515,12 @@ class Blsct_Wallet(Abstract_Wallet):
 
     def get_spendable_coins(self, domain=None, **kwargs):
         # staked commitments are locked for staking; they are spent via
-        # unstaking (create_unstake_transaction), never as regular inputs
+        # unstaking (create_unstake_transaction), never as regular inputs.
+        # Coinbase rewards must reach COINBASE_MATURITY first.
+        local_height = self.network.get_local_height() if self.network else 0
         return [u for u in self.get_utxos()
-                if u.d.get('height', 0) > 0 and not u.d.get('staked')]
+                if u.d.get('height', 0) > 0 and not u.d.get('staked')
+                and self._is_mature(u.d, local_height)]
 
     def get_staked_outputs(self):
         """Unspent staked commitments (confirmed and unconfirmed)."""
@@ -768,6 +798,22 @@ class Blsct_Wallet(Abstract_Wallet):
     def get_staked_balance_sat(self) -> int:
         return sum(u.d['amount'] for u in self.get_staked_outputs())
 
+    def get_balances_for_piechart(self) -> PiechartBalance:
+        """Split the confirmed balance into staked (locked commitments) and
+        unstaked so the GUI can show both."""
+        c, u, x = self.get_balance()
+        staked = sum(u_.d['amount'] for u_ in self.get_staked_outputs()
+                     if u_.d.get('height', 0) > 0)
+        return PiechartBalance(
+            confirmed=c - staked,
+            unconfirmed=u,
+            unmatured=x,
+            frozen=0,
+            lightning=0,
+            lightning_frozen=0,
+            staked=staked,
+        )
+
     # --------------------------------------------------------------- history
 
     def get_history_items(self) -> List[dict]:
@@ -856,7 +902,7 @@ class Blsct_Wallet(Abstract_Wallet):
                 'value': str(util.Satoshis(it['amount_sat'])),
                 'memos': it['memos'],
             })
-        end_balance = sum(self.get_balance()[:2])
+        end_balance = sum(self.get_balance())
         return {'transactions': out,
                 'end_balance': str(util.Satoshis(end_balance))}
 
@@ -1014,12 +1060,15 @@ class Blsct_Wallet(Abstract_Wallet):
                       amount: int, gamma_hex: str, blinding_key_hex: str,
                       account: int, addr_index: int, memo: str,
                       token_id: Optional[str], staked: bool = False,
-                      delegation: Optional[dict] = None):
+                      delegation: Optional[dict] = None,
+                      coinbase: bool = False):
         with self._blsct_lock:
             existing = self.blsct_outputs.get(output_hash)
             if existing:
                 existing['tx_hash'] = tx_hash
                 existing['height'] = height
+                if coinbase:
+                    existing['coinbase'] = True
                 return
             self.blsct_outputs[output_hash] = {
                 'tx_hash': tx_hash,
@@ -1036,6 +1085,8 @@ class Blsct_Wallet(Abstract_Wallet):
                 # {'delegate_key': hex, 'reward_address': str} for outputs
                 # whose stake is delegated to a third-party staker
                 'delegation': delegation,
+                # output of a coinbase tx: spendable only after COINBASE_MATURITY
+                'coinbase': coinbase,
                 'spent_by': None,
                 'spent_height': None,
             }
@@ -1710,6 +1761,7 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                 continue
             vouts = keys.get('vout') or keys.get('outputs') or []
             vins = keys.get('vin') or keys.get('inputs') or []
+            is_coinbase = not vins
 
             for v in vouts:
                 bk = v.get('blindingKey') or v.get('blinding_key') or ''
@@ -1721,7 +1773,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                 pair = await run_in_thread(keyring.match_output, bk, sk, int(vt))
                 if not pair:
                     continue
-                await self._fetch_and_store_output(tx_hash, height, ohash, bk, pair)
+                await self._fetch_and_store_output(tx_hash, height, ohash, bk, pair,
+                                                   coinbase=is_coinbase)
 
             vout_hashes = [v.get('outputHash') or v.get('output_hash')
                            for v in vouts]
@@ -1737,7 +1790,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
 
     async def _fetch_and_store_output(self, tx_hash: str, height: int,
                                       output_hash: str, blinding_key_hex: str,
-                                      pair: Tuple[int, int]):
+                                      pair: Tuple[int, int], *,
+                                      coinbase: bool = False):
         wallet = self.wallet
         keyring = wallet.keyring
         existing = wallet.blsct_outputs.get(output_hash)
@@ -1745,6 +1799,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
             with wallet._blsct_lock:
                 existing['tx_hash'] = tx_hash
                 existing['height'] = height
+                if coinbase:
+                    existing['coinbase'] = True
             return
         try:
             out_hex = await self.session.send_request(
@@ -1774,7 +1830,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                              blinding_key_hex=blinding_key_hex,
                              account=pair[0], addr_index=pair[1],
                              memo=rec.memo, token_id=token_id,
-                             staked=staked, delegation=delegation)
+                             staked=staked, delegation=delegation,
+                             coinbase=coinbase)
         self.logger.info(f'found output {output_hash[:16]} amount={rec.amount} '
                          f'height={height} acct={pair} staked={staked}')
         local_height = wallet.network.get_local_height() if wallet.network else 0

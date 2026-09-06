@@ -382,3 +382,73 @@ class TestBlsctHistoryRewardSplit(ElectrumTestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['txid'], '44' * 32)
         self.assertEqual(items[0]['amount_sat'], 8_0000_0000)
+
+
+class TestBlsctCoinbaseMaturity(ElectrumTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.config = SimpleConfig({'electrum_path': self.electrum_path})
+
+    def _wallet(self):
+        from electrum.blsct_wallet import restore_blsct_wallet_from_text
+        w = restore_blsct_wallet_from_text(
+            'ef' * 32, path=os.path.join(self.electrum_path, 'w'),
+            config=self.config)['wallet']
+
+        class FakeNetwork:
+            def __init__(self, h):
+                self.h = h
+
+            def get_local_height(self):
+                return self.h
+        w.network = FakeNetwork(1000)
+        return w
+
+    def _out(self, w, i, amount, memo, height, coinbase=None):
+        d = {'tx_hash': format(i, '064x'), 'height': height, 'amount': amount,
+             'gamma': format(999 + i, '064x'),
+             'blinding_key': w.keyring.spend_pub.serialize(),
+             'account': 0, 'addr_index': i,
+             'address': w.get_receiving_addresses()[i], 'memo': memo,
+             'token_id': None, 'staked': False, 'delegation': None,
+             'spent_by': None, 'spent_height': None}
+        if coinbase is not None:
+            d['coinbase'] = coinbase
+        return d
+
+    def test_immature_coinbase_not_spendable(self):
+        from electrum.bitcoin import COINBASE_MATURITY
+        w = self._wallet()
+        tip = w.network.get_local_height()
+        # depth 99 at the next block: still immature
+        w.blsct_outputs['a1' * 32] = self._out(
+            w, 0, 8_0000_0000, 'Reward', tip + 1 - (COINBASE_MATURITY - 1), coinbase=True)
+        # depth 100 at the next block: mature
+        w.blsct_outputs['a2' * 32] = self._out(
+            w, 1, 8_0000_0000, 'Reward', tip + 1 - COINBASE_MATURITY, coinbase=True)
+        # legacy record without the flag: recognised by the memo
+        w.blsct_outputs['a3' * 32] = self._out(w, 2, 8_0000_0000, 'Reward', tip)
+        # plain payment at the tip: spendable
+        w.blsct_outputs['a4' * 32] = self._out(w, 3, 1_0000_0000, '', tip, coinbase=False)
+        spendable = {c.output_hash for c in w.get_spendable_coins()}
+        self.assertEqual(spendable, {'a2' * 32, 'a4' * 32})
+        confirmed, unconfirmed, unmatured = w.get_balance()
+        self.assertEqual(confirmed, 9_0000_0000)
+        self.assertEqual(unconfirmed, 0)
+        self.assertEqual(unmatured, 16_0000_0000)
+        p_bal = w.get_balances_for_piechart()
+        self.assertEqual(p_bal.unmatured, 16_0000_0000)
+        self.assertEqual(p_bal.total(), 25_0000_0000)
+
+    def test_staked_split_in_piechart(self):
+        w = self._wallet()
+        tip = w.network.get_local_height()
+        w.blsct_outputs['b1' * 32] = self._out(w, 0, 3_0000_0000, '', tip - 5)
+        d = self._out(w, 1, 7_0000_0000, '', tip - 5)
+        d['staked'] = True
+        w.blsct_outputs['b2' * 32] = d
+        p_bal = w.get_balances_for_piechart()
+        self.assertEqual(p_bal.staked, 7_0000_0000)
+        self.assertEqual(p_bal.confirmed, 3_0000_0000)
+        self.assertEqual(p_bal.total(), 10_0000_0000)

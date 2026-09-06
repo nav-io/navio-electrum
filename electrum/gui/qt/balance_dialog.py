@@ -49,6 +49,7 @@ COLOR_UNMATURED = Qt.GlobalColor.magenta
 COLOR_FROZEN = ColorScheme.BLUE.as_color(True)
 COLOR_LIGHTNING = Qt.GlobalColor.yellow
 COLOR_FROZEN_LIGHTNING = Qt.GlobalColor.cyan
+COLOR_STAKED = Qt.GlobalColor.darkGreen
 
 
 class PieChartObject:
@@ -179,6 +180,7 @@ class BalanceDialog(WindowModalDialog):
         frozen = p_bal.frozen
         lightning = p_bal.lightning
         f_lightning = p_bal.lightning_frozen
+        staked = p_bal.staked
 
         frozen_str =  self.config.format_amount_and_units(frozen)
         confirmed_str =  self.config.format_amount_and_units(confirmed)
@@ -186,6 +188,7 @@ class BalanceDialog(WindowModalDialog):
         unmatured_str =  self.config.format_amount_and_units(unmatured)
         lightning_str =  self.config.format_amount_and_units(lightning)
         f_lightning_str =  self.config.format_amount_and_units(f_lightning)
+        staked_str =  self.config.format_amount_and_units(staked)
 
         frozen_fiat_str = self.fx.format_amount_and_units(frozen) if self.fx else ''
         confirmed_fiat_str = self.fx.format_amount_and_units(confirmed) if self.fx else ''
@@ -193,6 +196,7 @@ class BalanceDialog(WindowModalDialog):
         unmatured_fiat_str = self.fx.format_amount_and_units(unmatured) if self.fx else ''
         lightning_fiat_str = self.fx.format_amount_and_units(lightning) if self.fx else ''
         f_lightning_fiat_str = self.fx.format_amount_and_units(f_lightning) if self.fx else ''
+        staked_fiat_str = self.fx.format_amount_and_units(staked) if self.fx else ''
 
         piechart = PieChartWidget(
             max(120, 9 * font_height()),
@@ -203,6 +207,7 @@ class BalanceDialog(WindowModalDialog):
                 (_('On-chain'), COLOR_CONFIRMED, confirmed),
                 (_('Lightning'), COLOR_LIGHTNING, lightning),
                 (_('Lightning frozen'), COLOR_FROZEN_LIGHTNING, f_lightning),
+                (_('Staked'), COLOR_STAKED, staked),
             ]
         )
 
@@ -244,9 +249,14 @@ class BalanceDialog(WindowModalDialog):
             grid.addWidget(QLabel(_("Unmatured") + ':'), 3, 1)
             grid.addWidget(AmountLabel(unmatured_str), 3, 2, alignment=Qt.AlignmentFlag.AlignRight)
             grid.addWidget(AmountLabel(unmatured_fiat_str), 3, 3, alignment=Qt.AlignmentFlag.AlignRight)
+        if staked:
+            grid.addWidget(LegendWidget(COLOR_STAKED), 6, 0)
+            grid.addWidget(QLabel(_("Staked") + ':'), 6, 1)
+            grid.addWidget(AmountLabel(staked_str), 6, 2, alignment=Qt.AlignmentFlag.AlignRight)
+            grid.addWidget(AmountLabel(staked_fiat_str), 6, 3, alignment=Qt.AlignmentFlag.AlignRight)
         if confirmed:
             grid.addWidget(LegendWidget(COLOR_CONFIRMED), 1, 0)
-            grid.addWidget(QLabel(_("On-chain") + ':'), 1, 1)
+            grid.addWidget(QLabel((_("Unstaked") if staked else _("On-chain")) + ':'), 1, 1)
             grid.addWidget(AmountLabel(confirmed_str), 1, 2, alignment=Qt.AlignmentFlag.AlignRight)
             grid.addWidget(AmountLabel(confirmed_fiat_str), 1, 3, alignment=Qt.AlignmentFlag.AlignRight)
         if lightning:
