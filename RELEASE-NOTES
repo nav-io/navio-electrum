@@ -1,3 +1,16 @@
+# Release 4.9.9 - (September 8, 2026)
+ * BLSCT: block rewards younger than 100 blocks are no longer selected as
+   inputs. Spending one was rejected by the network with
+   "bad-txns-premature-spend-of-coinbase". Immature rewards are shown as
+   unmatured balance until they can be spent.
+ * BLSCT: the status bar and balance dialog now show the staked and
+   unstaked parts of the balance separately when funds are staked.
+ * BLSCT: a block reward is always its own history entry, even when the
+   block aggregated it with other outputs of the wallet under one txid.
+ * AppImage build: fixed the Debian bullseye apt bootstrap that started
+   failing after the distribution's end of life.
+
+
 # Release 4.9.8 - (September 2, 2026)
  * BLSCT range-proof v2: at or above each network's activation height,
    confidential transactions are now built under the v2 range-proof
