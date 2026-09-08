@@ -7,8 +7,12 @@ FROM debian:bullseye@sha256:cf48c31af360e1c0a0aedd33aae4d928b68c2cdf093f1612650e
 ENV LC_ALL=C.UTF-8 LANG=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
 
-# need ca-certificates before using snapshot packages
-RUN apt update -qq > /dev/null && apt install -qq --yes --no-install-recommends \
+# need ca-certificates before using snapshot packages over https.
+# Bootstrap from the same snapshot over plain http: the base image's default
+# sources include bullseye-security, whose Release file carries a Valid-Until
+# that expired with bullseye's EOL and makes `apt update` fail.
+RUN echo "deb http://snapshot.debian.org/archive/debian/20250530T143637Z/ bullseye main" > /etc/apt/sources.list && \
+    apt update -qq > /dev/null && apt install -qq --yes --no-install-recommends \
     ca-certificates
 
 # pin the distro packages
