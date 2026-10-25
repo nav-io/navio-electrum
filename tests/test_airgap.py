@@ -195,6 +195,28 @@ class TestAirgapFlow(ElectrumTestCase):
         txid, raw_hex = watch.check_airgap_reply(reply)
         self.assertEqual(len(txid), 64)
 
+    def test_unstake_whole_group(self):
+        """Unstaking a whole delegation group has no recipients, only
+        change (regression: build_signed_tx raised NotEnoughFunds)."""
+        full, watch = self._make_wallets()
+        bk = full.keyring.spend_pub.serialize()
+        d = {'tx_hash': 'cc' * 32, 'height': 300,
+             'amount': 10_000 * 100_000_000,
+             'gamma': format(999, '064x'), 'blinding_key': bk,
+             'account': -2, 'addr_index': 0,
+             'address': full.keyring.address(-2, 0),
+             'memo': '', 'token_id': None, 'staked': True,
+             'delegation': None, 'spent_by': None, 'spent_height': None}
+        full.blsct_outputs['66' * 32] = dict(d)
+        watch.blsct_outputs['66' * 32] = dict(d)
+        built = full.create_unstake_transaction()
+        self.assertEqual(len(built.txid), 64)
+        self.assertGreater(built.fee, 0)
+        proposal = watch.make_unstake_proposal()
+        reply = full.sign_airgap_proposal(proposal)
+        txid, _raw = watch.check_airgap_reply(reply)
+        self.assertEqual(len(txid), 64)
+
     def test_stable_output_hash_references(self):
         """BLSCT txids mutate when a block aggregates transactions, so
         history items must be referenced by destination output hash."""

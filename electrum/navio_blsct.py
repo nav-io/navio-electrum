@@ -768,7 +768,10 @@ def build_signed_tx(keyring: BlsctKeyRing,
 
     def build_with_fee(fee: int) -> str:
         send_total = total_out - (fee if subtract_fee_from_amount else 0)
-        if send_total < 0 or (send_total <= 0 and not any(t is not None for t in out_by_token)):
+        # no recipients at all is fine (e.g. unstaking everything: the
+        # inputs minus the fee all come back as change)
+        if send_total < 0 or (recipients and send_total <= 0
+                              and not any(t is not None for t in out_by_token)):
             raise NotEnoughFunds()
         change = total_in - total_out - (0 if subtract_fee_from_amount else fee)
         if change < 0:
