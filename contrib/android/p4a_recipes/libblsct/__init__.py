@@ -9,19 +9,14 @@ from pythonforandroid.util import current_directory
 
 
 class LibBlsctRecipe(Recipe):
-    """Builds navio-core's standalone libblsct.a (plus the univalue, mcl and
-    bls static archives it needs) for Android.
+    """Builds navio-core's standalone libblsct.a (plus the univalue and blst
+    static archives it needs) for Android.
 
     This mirrors what libblsct-bindings' setup.py does on desktop:
-    a CMake BUILD_LIBBLSCT_ONLY build of navio-core. The mcl and bls
-    sub-libraries are driven by their own GNU Makefiles via
-    ExternalProject_Add; navio-core's cmake/bls.cmake forwards
-    "CC=${CMAKE_C_COMPILER} ${CMAKE_C_COMPILER_ARG1}" to them, which loses
-    the --target flag the NDK toolchain passes via CMAKE_C_COMPILER_TARGET.
-    To avoid silently building host-arch archives, we build mcl and bls
-    ourselves first with the full cross-compiler invocation; the
-    ExternalProject build commands then find the archives up to date and
-    do nothing.
+    a CMake BUILD_LIBBLSCT_ONLY build of navio-core. navio-core vendors
+    supranational/blst and compiles it directly in CMake (cmake/blst.cmake),
+    picking the aarch64 / x86_64 assembly or the portable C build from
+    CMAKE_SYSTEM_PROCESSOR, so the NDK toolchain file is all it needs.
     """
 
     # navio-core commit pinned by libblsct-bindings (ffi/navio-core.sha) for navio-blsct 0.0.40
@@ -29,29 +24,19 @@ class LibBlsctRecipe(Recipe):
     url = 'https://github.com/nav-io/navio-core/archive/{version}.zip'
     sha512sum = '69f81c206eaf3ec9b3829a191c92311b097b022a456f95af4cb41859cfa6f396bbe82a8af490e290c911243531133802e89e98597d0cee81b1513593cb2980d0'
 
-    # mcl/bls GNU makefiles take the target cpu via ARCH=
-    _MCL_ARCH = {
-        'arm64-v8a': 'aarch64',
-        'armeabi-v7a': 'armv7l',
-        'x86_64': 'x86_64',
-        'x86': 'x86',
-    }
-
     def built_archives(self, arch):
         build_dir = self.get_build_dir(arch.arch)
         return [
             join(build_dir, 'build', 'lib', 'libblsct.a'),
             join(build_dir, 'build', 'src', 'univalue', 'libunivalue.a'),
-            join(build_dir, 'src', 'bls', 'lib', 'libbls384_256.a'),
-            join(build_dir, 'src', 'bls', 'mcl', 'lib', 'libmcl.a'),
+            join(build_dir, 'build', 'lib', 'libblst.a'),
         ]
 
     def include_dirs(self, arch):
         build_dir = self.get_build_dir(arch.arch)
         return [
             join(build_dir, 'src'),
-            join(build_dir, 'src', 'bls', 'include'),
-            join(build_dir, 'src', 'bls', 'mcl', 'include'),
+            join(build_dir, 'src', 'blst', 'bindings'),
         ]
 
     def should_build(self, arch):
@@ -61,41 +46,8 @@ class LibBlsctRecipe(Recipe):
         env = self.get_recipe_env(arch)
         build_dir = self.get_build_dir(arch.arch)
         num_jobs = str(multiprocessing.cpu_count())
-        mcl_arch = self._MCL_ARCH[arch.arch]
-
-        # same variable set as navio-core's cmake/bls.cmake ExternalProject
-        # build commands, but with the full NDK cross-compiler invocations
-        make_vars = [
-            'LLVM_OPT_VERSION=',
-            'MCL_USE_GMP=0',
-            'MCL_USE_OMP=0',
-            'ARCH=' + mcl_arch,
-            'CC=' + env['CC'],
-            'CXX=' + env['CXX'],
-            'AR=' + env['AR'] + ' r',
-            'CFLAGS_USER=',
-            'LDFLAGS=',
-        ]
 
         with current_directory(build_dir):
-            info('Cross-building mcl for {}'.format(arch.arch))
-            shprint(
-                sh.make, '-j', num_jobs,
-                'MCL_USE_LLVM=0', *make_vars,
-                '-C', join(build_dir, 'src', 'bls', 'mcl'),
-                'lib/libmcl.a',
-                _env=env,
-            )
-
-            info('Cross-building bls for {}'.format(arch.arch))
-            shprint(
-                sh.make, '-j', num_jobs,
-                'BLS_ETH=1', *make_vars,
-                '-C', join(build_dir, 'src', 'bls'),
-                'lib/libbls384_256.a',
-                _env=env,
-            )
-
             info('Configuring navio-core (BUILD_LIBBLSCT_ONLY) for {}'.format(arch.arch))
             toolchain = join(
                 self.ctx.ndk_dir, 'build', 'cmake', 'android.toolchain.cmake')
@@ -115,10 +67,12 @@ class LibBlsctRecipe(Recipe):
             )
 
             info('Building libblsct for {}'.format(arch.arch))
+            # blst is named explicitly: a static library's private link
+            # dependency is not built by `--target blsct` alone
             shprint(
                 sh.cmake,
                 '--build', join(build_dir, 'build'),
-                '--target', 'blsct', 'univalue',
+                '--target', 'blsct', 'blst', 'univalue',
                 '-j', num_jobs,
                 _env=env,
             )
