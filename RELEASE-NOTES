@@ -1,3 +1,15 @@
+# Release 4.9.10 - (October 25, 2026)
+ * BLSCT staking: unstaking a whole stake ("Unstake" with the amount left
+   empty, or the full staked amount) failed with "Insufficient funds".
+   It now returns the staked coins, minus the fee, as spendable balance.
+ * BLSCT cold staking: delegating a stake to a staking operator failed
+   with "stake delegation is not supported by the installed navio-blsct
+   bindings". The released bindings lacked the delegation API; the builds
+   now bundle navio-blsct 0.0.40, which ships it.
+ * Android: rebuilt against navio-blsct 0.0.40 and its navio-core, which
+   also brings the range-proof v2 transaction format to the Android app.
+
+
 # Release 4.9.9 - (September 8, 2026)
  * BLSCT: block rewards younger than 100 blocks are no longer selected as
    inputs. Spending one was rejected by the network with

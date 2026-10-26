@@ -24,10 +24,10 @@ class LibBlsctRecipe(Recipe):
     do nothing.
     """
 
-    # navio-core commit pinned by libblsct-bindings' setup.py (tag v0.1.0)
-    version = '459f3e8e9bc216ac82f2c472a84cc7540fa97f0b'
+    # navio-core commit pinned by libblsct-bindings (ffi/navio-core.sha) for navio-blsct 0.0.40
+    version = '80c87037cf699cb333f173f5f0aee6714d314b19'
     url = 'https://github.com/nav-io/navio-core/archive/{version}.zip'
-    sha512sum = 'e3e6e778da44deb6c31c12a1695ea676e8e542032d28a3d8fce2997db26e1b837b37e73bc2322ac7a4c09cfafabbaa526a58eb800bf4338981ca2cd60e57ff06'
+    sha512sum = '69f81c206eaf3ec9b3829a191c92311b097b022a456f95af4cb41859cfa6f396bbe82a8af490e290c911243531133802e89e98597d0cee81b1513593cb2980d0'
 
     # mcl/bls GNU makefiles take the target cpu via ARCH=
     _MCL_ARCH = {
