@@ -1072,10 +1072,15 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
                     balance_text += self.fx.get_fiat_status_text(balance,
                         self.base_unit(), self.get_decimal_point()) or ''
                 if p_bal.staked:
-                    unstaked = balance - p_bal.staked
+                    # like navio-core's getwalletinfo: immature rewards are
+                    # neither staked nor part of the spendable balance
+                    unstaked = balance - p_bal.staked - p_bal.unmatured
                     balance_text += "  |  %s: %s  %s: %s" % (
                         _("Staked"), self.format_amount_and_units(p_bal.staked),
                         _("Unstaked"), self.format_amount_and_units(unstaked))
+                    if p_bal.unmatured:
+                        balance_text += "  %s: %s" % (
+                            _("Immature"), self.format_amount_and_units(p_bal.unmatured))
                 if not self.network.proxy or not self.network.proxy.enabled:
                     icon = read_QIcon("status_connected%s.png"%fork_str)
                 else:
