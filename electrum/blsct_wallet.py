@@ -13,7 +13,8 @@ import asyncio
 import threading
 from typing import Optional, Dict, Tuple, List, Sequence, TYPE_CHECKING
 
-from aiorpcx import run_in_thread, ignore_after
+from aiorpcx import run_in_thread, ignore_after, RPCError
+from aiorpcx.jsonrpc import JSONRPC
 
 from . import util
 from . import constants
@@ -45,6 +46,10 @@ GAP_LIMIT = 20
 BLOCK_HASH_RETENTION = 500
 # parallel output downloads while scanning (each is a server round trip)
 OUTPUT_FETCH_CONCURRENCY = 16
+# blockchain.transaction.get_outputs: hashes per request (server max: 250)
+# and requests in flight
+OUTPUTS_BATCH_SIZE = 250
+OUTPUTS_BATCH_CONCURRENCY = 4
 # memos navio-core stamps on coinbase outputs (node/miner.cpp): the reward
 # and the optional operator-fee share
 REWARD_MEMO = 'Reward'
@@ -1643,6 +1648,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
 
     def __init__(self, wallet: Blsct_Wallet, network: 'Network'):
         self.wallet = wallet
+        # the session found not to support get_outputs, if any
+        self._batch_outputs_unsupported = None
         NetworkJobOnDefaultServer.__init__(self, network)
 
     async def _run_tasks(self, *, taskgroup):
@@ -1727,38 +1734,56 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
             return
         await self._check_reorg()
         progressed = False
-        while self._last_synced() < tip:
-            start = self._last_synced() + 1
-            res = await self.session.send_request(
-                'blockchain.block.get_range_txs_keys', [start], timeout=120)
-            blocks = res.get('blocks') or []
-            next_height = res.get('next_height', start + len(blocks))
-            if not blocks and next_height <= start:
-                break
-            matches = await run_in_thread(self._match_batch, blocks)
-            prefetched = await self._prefetch_outputs(
-                [h for h in matches if h not in wallet.blsct_outputs])
-            for i, block_txs in enumerate(blocks):
-                height = start + i
-                await self._process_block(height, block_txs or [],
-                                          matches=matches, prefetched=prefetched)
-                self._store_hash(height, self._local_hash(height) or '')
-                self._set_last_synced(height)
-            progressed = True
-            if next_height > start + len(blocks):
-                self._set_last_synced(next_height - 1)
-            # persist and show each batch: catching up on a busy (staking)
-            # wallet can take a while, and should neither look stuck nor
-            # start over when the wallet is closed half way
-            wallet.save_db()
-            util.trigger_callback('wallet_updated', wallet)
-            util.trigger_callback('status')
-            await asyncio.sleep(0)
+
+        def request_range(start):
+            return asyncio.ensure_future(self.session.send_request(
+                'blockchain.block.get_range_txs_keys', [start], timeout=120))
+
+        # the next range is requested before the current one is processed,
+        # so the download overlaps with matching and output fetching
+        next_res = None
+        try:
+            while self._last_synced() < tip:
+                start = self._last_synced() + 1
+                res = await (next_res or request_range(start))
+                next_res = None
+                blocks = res.get('blocks') or []
+                next_height = res.get('next_height', start + len(blocks))
+                if not blocks and next_height <= start:
+                    break
+                if next_height <= tip:
+                    next_res = request_range(next_height)
+                await self._process_range(start, blocks, next_height)
+                progressed = True
+        finally:
+            if next_res is not None:
+                next_res.cancel()
         if progressed:
             wallet.save_db()
             util.trigger_callback('wallet_updated', wallet)
         if not wallet.is_up_to_date() and self._last_synced() >= tip > 0:
             wallet.set_blsct_up_to_date(True)
+
+    async def _process_range(self, start: int, blocks: list, next_height: int):
+        """Process one get_range_txs_keys page covering [start, next_height)."""
+        wallet = self.wallet
+        matches = await run_in_thread(self._match_batch, blocks)
+        prefetched = await self._prefetch_outputs(
+            [h for h in matches if h not in wallet.blsct_outputs])
+        for i, block_txs in enumerate(blocks):
+            height = start + i
+            await self._process_block(height, block_txs or [],
+                                      matches=matches, prefetched=prefetched)
+            self._store_hash(height, self._local_hash(height) or '')
+            self._set_last_synced(height)
+        if next_height > start + len(blocks):
+            self._set_last_synced(next_height - 1)
+        # persist and show each page: catching up on a busy (staking)
+        # wallet can take a while, and should neither look stuck nor
+        # start over when the wallet is closed half way
+        wallet.save_db()
+        util.trigger_callback('wallet_updated', wallet)
+        util.trigger_callback('status')
 
     @staticmethod
     def _tx_entries(block_txs: list):
@@ -1802,21 +1827,61 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
         return matches
 
     async def _prefetch_outputs(self, output_hashes: Sequence[str]) -> Dict[str, str]:
-        """Download the given outputs concurrently (one round trip each
-        would make a staking wallet's catch-up take hours).
+        """Download the given outputs (one sequential round trip each would
+        make a staking wallet's catch-up take hours).
         -> {output_hash: output_hex}; failed downloads are left out."""
+        session = self.session
+        if output_hashes and self._batch_outputs_unsupported is not session:
+            try:
+                return await self._fetch_outputs_batched(output_hashes)
+            except RPCError as e:
+                if e.code != JSONRPC.METHOD_NOT_FOUND:
+                    raise
+                self.logger.info('server has no blockchain.transaction.get_outputs; '
+                                 'falling back to single requests')
+                self._batch_outputs_unsupported = session
         sem = asyncio.Semaphore(OUTPUT_FETCH_CONCURRENCY)
         result = {}
 
         async def fetch(h):
             async with sem:
                 try:
-                    result[h] = await self.session.send_request(
+                    result[h] = await session.send_request(
                         'blockchain.transaction.get_output', [h], timeout=30)
                 except Exception as e:
                     self.logger.info(f'get_output({h}) failed: {e!r}')
 
         await asyncio.gather(*(fetch(h) for h in output_hashes))
+        return result
+
+    async def _fetch_outputs_batched(self, output_hashes: Sequence[str]) -> Dict[str, str]:
+        """blockchain.transaction.get_outputs: up to OUTPUTS_BATCH_SIZE
+        outputs per request, a few requests in flight. The server may return
+        fewer items than asked for (response size cap); the rest is asked
+        again. Outputs the server does not have are left out."""
+        session = self.session
+        result = {}
+        queue = list(output_hashes)
+        sem = asyncio.Semaphore(OUTPUTS_BATCH_CONCURRENCY)
+
+        async def fetch(chunk):
+            async with sem:
+                items = await session.send_request(
+                    'blockchain.transaction.get_outputs', [chunk], timeout=60)
+            if not isinstance(items, list) or not items or len(items) > len(chunk):
+                raise Exception(f'unexpected get_outputs response for {len(chunk)} hashes')
+            for h, out_hex in zip(chunk, items):
+                if out_hex is None:
+                    self.logger.info(f'get_outputs: server does not have {h}')
+                else:
+                    result[h] = out_hex
+            return chunk[len(items):]
+
+        while queue:
+            chunks = [queue[i:i + OUTPUTS_BATCH_SIZE]
+                      for i in range(0, len(queue), OUTPUTS_BATCH_SIZE)]
+            leftovers = await asyncio.gather(*(fetch(c) for c in chunks))
+            queue = [h for rest in leftovers for h in rest]
         return result
 
     async def _process_block(self, height: int, block_txs: list, *,

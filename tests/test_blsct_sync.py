@@ -1,5 +1,8 @@
 import asyncio
 
+from aiorpcx import RPCError
+from aiorpcx.jsonrpc import JSONRPC
+
 from electrum import blsct_wallet
 from electrum.logging import get_logger
 from electrum.blsct_wallet import BlsctSynchronizer
@@ -8,16 +11,26 @@ from tests import ElectrumTestCase
 
 
 class _FakeSession:
-    """Answers get_output after a delay, tracking how many requests are in
-    flight at once."""
+    """Answers get_output(s) after a delay, tracking how many requests are
+    in flight at once. Without `batch`, get_outputs is an unknown method;
+    with it, at most `batch` items are returned per request."""
 
-    def __init__(self, fail=()):
+    def __init__(self, fail=(), batch=None):
         self.in_flight = 0
         self.max_in_flight = 0
         self.calls = 0
         self.fail = set(fail)
+        self.batch = batch
+        self.methods = []
 
     async def send_request(self, method, params, timeout=None):
+        self.methods.append(method)
+        if method == 'blockchain.transaction.get_outputs':
+            if self.batch is None:
+                raise RPCError(JSONRPC.METHOD_NOT_FOUND, 'unknown method')
+            await asyncio.sleep(0.01)
+            return [None if h in self.fail else 'hex-' + h
+                    for h in params[0][:self.batch]]
         assert method == 'blockchain.transaction.get_output'
         self.calls += 1
         self.in_flight += 1
@@ -50,6 +63,7 @@ def _sync(session=None, mine=()):
     s.wallet = _FakeWallet(set(mine))
     s.interface = type("Iface", (), {"session": session})()
     s.logger = get_logger(__name__)
+    s._batch_outputs_unsupported = None
     return s
 
 
@@ -70,6 +84,26 @@ class TestBlsctSync(ElectrumTestCase):
         self.assertNotIn('h3', res)
         self.assertEqual(res['h7'], 'hex-h7')
         self.assertEqual(len(res), 49)
+
+    async def test_prefetch_batched(self):
+        # the server caps each response at 30 items; the rest is asked again
+        session = _FakeSession(fail={'h3'}, batch=30)
+        s = _sync(session)
+        hashes = [f'h{i}' for i in range(600)]
+        res = await s._prefetch_outputs(hashes)
+        self.assertEqual(len(res), 599)
+        self.assertNotIn('h3', res)
+        self.assertEqual(res['h599'], 'hex-h599')
+        self.assertEqual(session.calls, 0)  # no single-output requests
+        self.assertEqual(set(session.methods), {'blockchain.transaction.get_outputs'})
+
+    async def test_prefetch_falls_back_once_per_session(self):
+        session = _FakeSession()
+        s = _sync(session)
+        res = await s._prefetch_outputs(['a', 'b'])
+        self.assertEqual(res, {'a': 'hex-a', 'b': 'hex-b'})
+        await s._prefetch_outputs(['c'])
+        self.assertEqual(session.methods.count('blockchain.transaction.get_outputs'), 1)
 
     async def test_batch_matching_and_prefetched_processing(self):
         blocks = [
