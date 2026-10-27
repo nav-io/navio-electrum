@@ -1035,9 +1035,17 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
             # until we get a headers subscription request response.
             # Display the synchronizing message in that case.
             if not self.wallet.is_up_to_date() or server_height == 0:
-                num_sent, num_answered = self.wallet.adb.get_history_sync_state_details()
-                network_text = ("{} ({}/{})"
-                                .format(_("Synchronizing..."), num_answered, num_sent))
+                local_height = self.network.get_local_height()
+                if self.wallet.wallet_type == 'blsct' and local_height > 0:
+                    # BLSCT wallets scan blocks instead of syncing addresses
+                    cur = max(0, self.wallet.blsct_sync.get('last_height', 0))
+                    pct = min(100, 100 * cur // local_height)
+                    network_text = ("{} {}% ({}/{})"
+                                    .format(_("Scanning blocks..."), pct, cur, local_height))
+                else:
+                    num_sent, num_answered = self.wallet.adb.get_history_sync_state_details()
+                    network_text = ("{} ({}/{})"
+                                    .format(_("Synchronizing..."), num_answered, num_sent))
                 icon = read_QIcon("status_waiting.png")
             elif server_lag > 1:
                 network_text = _("Server is lagging ({} blocks)").format(server_lag)

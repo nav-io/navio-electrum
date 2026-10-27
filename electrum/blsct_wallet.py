@@ -43,6 +43,8 @@ DEFAULT_KEYPOOL = 20
 GAP_LIMIT = 20
 # how many recent block hashes to retain for reorg detection
 BLOCK_HASH_RETENTION = 500
+# parallel output downloads while scanning (each is a server round trip)
+OUTPUT_FETCH_CONCURRENCY = 16
 # memos navio-core stamps on coinbase outputs (node/miner.cpp): the reward
 # and the optional operator-fee share
 REWARD_MEMO = 'Reward'
@@ -1733,14 +1735,24 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
             next_height = res.get('next_height', start + len(blocks))
             if not blocks and next_height <= start:
                 break
+            matches = await run_in_thread(self._match_batch, blocks)
+            prefetched = await self._prefetch_outputs(
+                [h for h in matches if h not in wallet.blsct_outputs])
             for i, block_txs in enumerate(blocks):
                 height = start + i
-                await self._process_block(height, block_txs or [])
+                await self._process_block(height, block_txs or [],
+                                          matches=matches, prefetched=prefetched)
                 self._store_hash(height, self._local_hash(height) or '')
                 self._set_last_synced(height)
             progressed = True
             if next_height > start + len(blocks):
                 self._set_last_synced(next_height - 1)
+            # persist and show each batch: catching up on a busy (staking)
+            # wallet can take a while, and should neither look stuck nor
+            # start over when the wallet is closed half way
+            wallet.save_db()
+            util.trigger_callback('wallet_updated', wallet)
+            util.trigger_callback('status')
             await asyncio.sleep(0)
         if progressed:
             wallet.save_db()
@@ -1748,11 +1760,10 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
         if not wallet.is_up_to_date() and self._last_synced() >= tip > 0:
             wallet.set_blsct_up_to_date(True)
 
-    async def _process_block(self, height: int, block_txs: list):
-        wallet = self.wallet
-        keyring = wallet.keyring
-
-        for entry in block_txs:
+    @staticmethod
+    def _tx_entries(block_txs: list):
+        """-> (tx_hash, vouts, vins) for each well-formed entry of a block"""
+        for entry in block_txs or []:
             try:
                 tx_hash, keys = entry[0], entry[1]
             except (IndexError, TypeError):
@@ -1761,20 +1772,76 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                 continue
             vouts = keys.get('vout') or keys.get('outputs') or []
             vins = keys.get('vin') or keys.get('inputs') or []
+            yield tx_hash, vouts, vins
+
+    @staticmethod
+    def _output_keys(v: dict):
+        """-> (output_hash, blinding_key, spending_key, view_tag), or None"""
+        bk = v.get('blindingKey') or v.get('blinding_key') or ''
+        sk = v.get('spendingKey') or v.get('spending_key') or ''
+        vt = v.get('viewTag') if v.get('viewTag') is not None else v.get('view_tag')
+        ohash = v.get('outputHash') or v.get('output_hash')
+        if not (bk and sk and ohash) or vt is None:
+            return None
+        return ohash, bk, sk, int(vt)
+
+    def _match_batch(self, blocks: list) -> Dict[str, Tuple[int, int]]:
+        """Trial-match every output of a batch of blocks against our keys
+        (CPU only; run in a thread). -> {output_hash: (account, index)}"""
+        keyring = self.wallet.keyring
+        matches = {}
+        for block_txs in blocks:
+            for _tx_hash, vouts, _vins in self._tx_entries(block_txs):
+                for v in vouts:
+                    k = self._output_keys(v)
+                    if k is None:
+                        continue
+                    pair = keyring.match_output(k[1], k[2], k[3])
+                    if pair:
+                        matches[k[0]] = pair
+        return matches
+
+    async def _prefetch_outputs(self, output_hashes: Sequence[str]) -> Dict[str, str]:
+        """Download the given outputs concurrently (one round trip each
+        would make a staking wallet's catch-up take hours).
+        -> {output_hash: output_hex}; failed downloads are left out."""
+        sem = asyncio.Semaphore(OUTPUT_FETCH_CONCURRENCY)
+        result = {}
+
+        async def fetch(h):
+            async with sem:
+                try:
+                    result[h] = await self.session.send_request(
+                        'blockchain.transaction.get_output', [h], timeout=30)
+                except Exception as e:
+                    self.logger.info(f'get_output({h}) failed: {e!r}')
+
+        await asyncio.gather(*(fetch(h) for h in output_hashes))
+        return result
+
+    async def _process_block(self, height: int, block_txs: list, *,
+                             matches: Optional[Dict[str, Tuple[int, int]]] = None,
+                             prefetched: Optional[Dict[str, str]] = None):
+        wallet = self.wallet
+        keyring = wallet.keyring
+
+        for tx_hash, vouts, vins in self._tx_entries(block_txs):
             is_coinbase = not vins
 
             for v in vouts:
-                bk = v.get('blindingKey') or v.get('blinding_key') or ''
-                sk = v.get('spendingKey') or v.get('spending_key') or ''
-                vt = v.get('viewTag') if v.get('viewTag') is not None else v.get('view_tag')
-                ohash = v.get('outputHash') or v.get('output_hash')
-                if not (bk and sk and ohash) or vt is None:
+                k = self._output_keys(v)
+                if k is None:
                     continue
-                pair = await run_in_thread(keyring.match_output, bk, sk, int(vt))
+                ohash, bk, sk, vt = k
+                if matches is not None:
+                    pair = matches.get(ohash)
+                else:
+                    pair = await run_in_thread(keyring.match_output, bk, sk, vt)
                 if not pair:
                     continue
-                await self._fetch_and_store_output(tx_hash, height, ohash, bk, pair,
-                                                   coinbase=is_coinbase)
+                await self._fetch_and_store_output(
+                    tx_hash, height, ohash, bk, pair, coinbase=is_coinbase,
+                    out_hex=(prefetched or {}).get(ohash))
 
             vout_hashes = [v.get('outputHash') or v.get('output_hash')
                            for v in vouts]
@@ -1791,7 +1858,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
     async def _fetch_and_store_output(self, tx_hash: str, height: int,
                                       output_hash: str, blinding_key_hex: str,
                                       pair: Tuple[int, int], *,
-                                      coinbase: bool = False):
+                                      coinbase: bool = False,
+                                      out_hex: Optional[str] = None):
         wallet = self.wallet
         keyring = wallet.keyring
         existing = wallet.blsct_outputs.get(output_hash)
@@ -1802,12 +1870,13 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                 if coinbase:
                     existing['coinbase'] = True
             return
-        try:
-            out_hex = await self.session.send_request(
-                'blockchain.transaction.get_output', [output_hash], timeout=30)
-        except Exception as e:
-            self.logger.info(f'get_output({output_hash}) failed: {e!r}')
-            return
+        if out_hex is None:
+            try:
+                out_hex = await self.session.send_request(
+                    'blockchain.transaction.get_output', [output_hash], timeout=30)
+            except Exception as e:
+                self.logger.info(f'get_output({output_hash}) failed: {e!r}')
+                return
         try:
             parsed = parse_output_hex(out_hex)
         except Exception:
