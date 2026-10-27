@@ -1,3 +1,18 @@
+# Release 4.9.11 - (October 27, 2026)
+ * BLSCT sync: catching up after time offline is much faster. Outputs
+   belonging to the wallet are now downloaded in batches (with servers
+   that support blockchain.transaction.get_outputs, such as
+   electrum.nav.io) instead of one request each; a staking wallet that
+   was offline for weeks went from hours to well under a minute.
+ * BLSCT sync: progress is saved and the history updated as the scan
+   advances, so closing the wallet half way no longer starts the scan
+   over. The status bar shows the scanned height instead of
+   "Synchronizing... (0/0)".
+ * Balance: the status bar's Unstaked figure no longer includes block
+   rewards that are not mature yet; they are shown as Immature, matching
+   navio-core's getwalletinfo.
+
+
 # Release 4.9.10 - (October 25, 2026)
  * BLSCT staking: unstaking a whole stake ("Unstake" with the amount left
    empty, or the full staked amount) failed with "Insufficient funds".
