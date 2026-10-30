@@ -1,3 +1,12 @@
+# Release 4.9.12 - (October 30, 2026)
+ * BLSCT cold staking: a valid operator delegation key could be rejected
+   with "delegate key is not a valid 48-byte G1 point" when it was copied
+   from a chat app that slipped line breaks or invisible characters into
+   it. Pasted keys are now cleaned up (whitespace, zero-width characters
+   and a 0x prefix are ignored), and an invalid key gets a specific
+   message: not hexadecimal, wrong length, or not a valid key.
+
+
 # Release 4.9.11 - (October 27, 2026)
  * BLSCT sync: catching up after time offline is much faster. Outputs
    belonging to the wallet are now downloaded in batches (with servers
