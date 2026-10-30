@@ -72,15 +72,13 @@ class CustomModel(QtCore.QAbstractItemModel):
         # Open-coded
         #   if not QtCore.QAbstractItemModel.hasIndex(self, row, column, _parent):
         # the implementation is equivalent but it's in C++,
-        # so VM entries take up inordinate amounts of time (up to 25% of refresh()):
-        if row < 0 or column < 0 or row >= self.rowCount(_parent) or column >= self._columncount:
-            return QtCore.QModelIndex()
-
-        child = parent.child(row)
-        if child:
-            return QtCore.QAbstractItemModel.createIndex(self, row, column, child)
-        else:
-            return QtCore.QModelIndex()
+        # so VM entries take up inordinate amounts of time (up to 25% of refresh()).
+        # Sorting a big history calls this millions of times, so the
+        # rowCount()/child() wrappers are open-coded too.
+        children = parent._children
+        if 0 <= row < len(children) and 0 <= column < self._columncount:
+            return self.createIndex(row, column, children[row])
+        return QtCore.QModelIndex()
 
     def parent(self, index):
         if index.isValid():

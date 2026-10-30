@@ -87,6 +87,10 @@ class HistorySortModel(QSortFilterProxyModel):
             return node.sort_keys[col]
 
     def lessThan(self, source_left: QModelIndex, source_right: QModelIndex):
+        if source_left.column() == HistoryColumns.STATUS:
+            # hot path (default sort column): big wallets sort tens of
+            # thousands of rows with millions of comparisons
+            return source_left.row() < source_right.row()
         return self.data_for(source_left) < self.data_for(source_right)
 
 
@@ -302,12 +306,15 @@ class HistoryModel(CustomModel, Logger):
             onchain_domain=self.get_domain(),
             include_lightning=self.should_include_lightning_payments(),
         )
-        old_length = self._root.childCount()
-        if old_length != 0:
-            self.beginRemoveRows(QModelIndex(), 0, old_length)
-            self.transactions.clear()
-            self._root = HistoryNode(self, None)
-            self.endRemoveRows()
+        if self._refresh_incrementally(transactions):
+            self.view.filter()
+            self.view.num_tx_label.setText(_("{} transactions").format(len(self.transactions)))
+            return
+        # one model reset (one re-sort in the proxy) instead of removing
+        # and re-inserting every row
+        self.beginResetModel()
+        self.transactions.clear()
+        self._root = HistoryNode(self, None)
         parents = {}
         for tx_item in transactions.values():
             node = HistoryNode(self, tx_item)
@@ -330,10 +337,8 @@ class HistoryModel(CustomModel, Logger):
                 tx_mined_info = self._tx_mined_info_from_tx_item(tx_item)
                 self.tx_status_cache[txid] = self.window.wallet.get_tx_status(txid, tx_mined_info)
 
-        new_length = self._root.childCount()
-        self.beginInsertRows(QModelIndex(), 0, new_length-1)
         self.transactions = transactions
-        self.endInsertRows()
+        self.endResetModel()
 
         if selected_row:
             self.view.selectionModel().select(
@@ -353,6 +358,75 @@ class HistoryModel(CustomModel, Logger):
         num_tx = len(self.transactions)
         if self.view:
             self.view.num_tx_label.setText(_("{} transactions").format(num_tx))
+
+    # fields whose changes only affect the status column
+    _STATUS_FIELDS = ('height', 'confirmations', 'timestamp', 'date', 'monotonic_timestamp')
+
+    def _refresh_incrementally(self, transactions) -> bool:
+        """Cheap update for the common case of a big wallet getting new
+        blocks: existing rows keep their order and amounts, only their
+        confirmations change, and new rows are appended at the end.
+        Rebuilding (and re-sorting) tens of thousands of rows instead
+        freezes the GUI for seconds. Returns False if a full rebuild is
+        needed."""
+        old = self.transactions
+        n_old = len(old)
+        if n_old == 0 or len(transactions) < n_old or n_old != self._root.childCount():
+            return False
+        new_keys = list(transactions.keys())
+        if new_keys[:n_old] != list(old.keys()):
+            return False
+        nodes = self._root._children
+        changed_rows = []
+        for row in range(n_old):
+            node = nodes[row]
+            old_item = node.get_data()
+            new_item = transactions.value_from_pos(row)
+            if node._children or new_item.get('children'):
+                return False
+            if old_item.keys() - {'balance'} != new_item.keys():
+                return False
+            for k, v in new_item.items():
+                if k not in self._STATUS_FIELDS and old_item[k] != v:
+                    return False
+            if (old_item.get('height') != new_item.get('height')
+                    or old_item.get('timestamp') != new_item.get('timestamp')
+                    or min(old_item.get('confirmations') or 0, 6)
+                    != min(new_item.get('confirmations') or 0, 6)):
+                changed_rows.append(row)
+        # nothing below can fail: commit
+        for row in range(n_old):
+            node = nodes[row]
+            new_item = transactions.value_from_pos(row)
+            new_item['balance'] = node.get_data()['balance']
+            node._data = new_item
+        for row in changed_rows:
+            tx_item = nodes[row].get_data()
+            if not tx_item.get('lightning', False):
+                self.tx_status_cache[tx_item['txid']] = self.window.wallet.get_tx_status(
+                    tx_item['txid'], self._tx_mined_info_from_tx_item(tx_item))
+        if n_old == len(transactions):
+            self.transactions = transactions
+        else:
+            balance = nodes[-1].get_data()['balance'].value
+            self.beginInsertRows(QModelIndex(), n_old, len(transactions) - 1)
+            for row in range(n_old, len(transactions)):
+                tx_item = transactions.value_from_pos(row)
+                node = HistoryNode(self, tx_item)
+                self._root.addChild(node)
+                balance += tx_item['value'].value
+                node.set_balance(balance)
+                if not tx_item.get('lightning', False):
+                    self.tx_status_cache[tx_item['txid']] = self.window.wallet.get_tx_status(
+                        tx_item['txid'], self._tx_mined_info_from_tx_item(tx_item))
+            self.transactions = transactions
+            self.endInsertRows()
+        if changed_rows:
+            self.dataChanged.emit(
+                self.createIndex(changed_rows[0], HistoryColumns.STATUS),
+                self.createIndex(changed_rows[-1], HistoryColumns.STATUS),
+                [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.DecorationRole])
+        return True
 
     def set_visibility_of_columns(self):
         def set_visible(col: int, b: bool):

@@ -79,6 +79,7 @@ class UTXOList(MyTreeView):
         )
         self._spend_set = set()
         self._utxo_dict = {}
+        self._last_update_key = None
         self.wallet = self.main_window.wallet
         self.std_model = QStandardItemModel(self)
         self.proxy = MySortModel(self, sort_role=self.ROLE_SORT_ORDER)
@@ -100,9 +101,22 @@ class UTXOList(MyTreeView):
 
     @profiler(min_threshold=0.05)
     def update(self):
-        # not calling maybe_defer_update() as it interferes with coincontrol status bar
-        self.proxy.setDynamicSortFilter(False)  # temp. disable re-sorting after every change
+        # maybe_defer_update() would interfere with the coincontrol status
+        # bar, so only defer while no coins are selected. A big staking
+        # wallet has tens of thousands of coins and rebuilding the list
+        # freezes the GUI, so also skip it when nothing shown has changed.
+        if not self._spend_set and self.maybe_defer_update():
+            return
         utxos = self.wallet.get_utxos()
+        update_key = (tuple((coin_name(u), u.value_sats(), u.block_height,
+                             self.wallet.is_frozen_coin(u)) for u in utxos),
+                      tuple(self.wallet.get_all_labels().items()),
+                      # amount formatting settings (unit, decimal places)
+                      self.main_window.format_amount(123456789, whitespaces=True))
+        if update_key == self._last_update_key:
+            return
+        self._last_update_key = update_key
+        self.proxy.setDynamicSortFilter(False)  # temp. disable re-sorting after every change
         self._maybe_reset_coincontrol(utxos)
         self._utxo_dict = dict([(coin_name(utxo), utxo) for utxo in utxos])
         self.std_model.clear()
