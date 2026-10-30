@@ -1,3 +1,11 @@
+# Release 4.9.13 - (October 30, 2026)
+ * Performance: wallets with a long staking history (tens of thousands
+   of block rewards) no longer freeze for many seconds on every new
+   block or when switching tabs. The history list is updated in place
+   instead of being rebuilt, and the coins list is only rebuilt when
+   shown and changed.
+
+
 # Release 4.9.12 - (October 30, 2026)
  * BLSCT cold staking: a valid operator delegation key could be rejected
    with "delegate key is not a valid 48-byte G1 point" when it was copied
