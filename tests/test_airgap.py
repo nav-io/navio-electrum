@@ -119,6 +119,29 @@ class TestAirgapFlow(ElectrumTestCase):
         self.assertEqual(len(txid), 64)
         self.assertGreater(len(raw_hex), 1000)
 
+    def test_send_roundtrip_via_files(self):
+        from electrum.airgap import payload_to_file_text, payload_from_file_text
+        full, watch = self._make_wallets()
+        dest = full.keyring.address(0, 5)
+        proposal = watch.make_send_proposal([(dest, 3_0000_0000, 'hi')])
+        # a file written on one OS and opened on another
+        text = payload_to_file_text(proposal).replace('\n', '\r\n')
+        loaded = payload_from_file_text(text)
+        self.assertEqual(loaded, proposal)
+        reply = full.sign_airgap_proposal(loaded)
+        txid, raw_hex = watch.check_airgap_reply(
+            payload_from_file_text(payload_to_file_text(reply)))
+        self.assertEqual(len(txid), 64)
+
+    def test_bad_files_rejected(self):
+        from electrum.airgap import payload_to_file_text, payload_from_file_text
+        lines = payload_to_file_text({'t': 'x', 'pad': bytes(range(256)) * 8}).splitlines()
+        self.assertGreater(len(lines), 1)
+        for text in ('', 'hello', '\n'.join(lines[:-1]),
+                     '\n'.join(lines).replace(lines[0][-5:], 'AAAAA')):
+            with self.assertRaises(ValueError):
+                payload_from_file_text(text)
+
     def test_envelope_rejections(self):
         full, watch = self._make_wallets()
         dest = full.keyring.address(0, 5)

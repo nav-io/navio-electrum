@@ -247,6 +247,26 @@ class FragmentCollector:
         return obj
 
 
+# files are the QR fragments, one per line, so a file and a scanned code
+# go through the same framing and checksum
+MAX_FILE_SIZE = MAX_FRAGMENTS * (FRAGMENT_DATA_LEN + 64)
+
+
+def payload_to_file_text(payload: dict) -> str:
+    return '\n'.join(payload_to_fragments(payload)) + '\n'
+
+
+def payload_from_file_text(text: str) -> dict:
+    collector = FragmentCollector()
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            collector.add(line)
+    if not collector.is_complete():
+        raise ValueError('not a complete Navio air-gap file')
+    return collector.payload()
+
+
 # ---------------------------------------------------------------------------
 # proposal / reply construction and validation
 # ---------------------------------------------------------------------------

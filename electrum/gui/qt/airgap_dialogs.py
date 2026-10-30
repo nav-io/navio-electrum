@@ -13,7 +13,8 @@ from electrum import airgap
 from electrum.i18n import _
 from electrum.util import UserFacingException
 
-from .util import WindowModalDialog, WaitingDialog, ColorScheme
+from .util import (WindowModalDialog, WaitingDialog, ColorScheme,
+                   getOpenFileName, getSaveFileName)
 from .qrcodewidget import QRCodeWidget
 
 if TYPE_CHECKING:
@@ -96,6 +97,41 @@ def _scan_multipart(parent, config, on_payload, on_error):
         on_error(repr(e))
 
 
+_FILE_FILTER = _('Navio air-gap files') + ' (*.txt);;' + _('All files') + ' (*)'
+
+
+def _save_payload(parent, window, payload: dict, filename: str, title: str):
+    path = getSaveFileName(
+        parent=parent, title=title, filename=filename, filter=_FILE_FILTER,
+        default_extension='txt', config=window.config)
+    if not path:
+        return
+    try:
+        with open(path, 'w', encoding='ascii') as f:
+            f.write(airgap.payload_to_file_text(payload))
+    except OSError as e:
+        window.show_error(_('Could not save file') + f':\n{e}')
+        return
+    window.show_message(_('Saved to {}').format(path))
+
+
+def _load_payload(parent, window, title: str, on_payload):
+    path = getOpenFileName(parent=parent, title=title, filter=_FILE_FILTER,
+                           config=window.config)
+    if not path:
+        return
+    try:
+        with open(path, 'r', encoding='ascii', errors='replace') as f:
+            text = f.read(airgap.MAX_FILE_SIZE + 1)
+        if len(text) > airgap.MAX_FILE_SIZE:
+            raise ValueError('file too large')
+        payload = airgap.payload_from_file_text(text)
+    except (OSError, ValueError) as e:
+        window.show_error(_('Could not load file') + f':\n{e}')
+        return
+    on_payload(payload)
+
+
 class AirgapSignDialog(WindowModalDialog):
     """Online (watch-only) side: show the proposal, scan the signed reply,
     broadcast."""
@@ -106,6 +142,7 @@ class AirgapSignDialog(WindowModalDialog):
                                    _('Sign with offline device'))
         self.window = window
         self.wallet = window.wallet
+        self.proposal = proposal
         fragments = airgap.payload_to_fragments(proposal)
 
         vbox = QVBoxLayout(self)
@@ -113,9 +150,11 @@ class AirgapSignDialog(WindowModalDialog):
             lb = QLabel(subtitle)
             lb.setWordWrap(True)
             vbox.addWidget(lb)
-        vbox.addWidget(QLabel(_(
+        lb = QLabel(_(
             'On the offline device, open Wallet menu > Air-gapped signer '
-            'and scan this code:')))
+            'and scan this code, or save it to a file and load it there:'))
+        lb.setWordWrap(True)
+        vbox.addWidget(lb)
         self.qr = AnimatedQRWidget(fragments)
         vbox.addWidget(self.qr, 1)
         if len(fragments) > 1:
@@ -123,9 +162,18 @@ class AirgapSignDialog(WindowModalDialog):
                                   .format(len(fragments))))
 
         buttons = QHBoxLayout()
+        save_b = QPushButton(_('Save to file...'))
+        save_b.clicked.connect(lambda: _save_payload(
+            self, self.window, self.proposal, 'navio-unsigned.txt',
+            _('Save unsigned transaction')))
+        buttons.addWidget(save_b)
         scan_b = QPushButton(_('Scan signed transaction...'))
         scan_b.clicked.connect(self._scan_reply)
         buttons.addWidget(scan_b)
+        load_b = QPushButton(_('Load signed transaction...'))
+        load_b.clicked.connect(lambda: _load_payload(
+            self, self.window, _('Load signed transaction'), self._on_reply))
+        buttons.addWidget(load_b)
         buttons.addStretch()
         close_b = QPushButton(_('Close'))
         close_b.clicked.connect(self.reject)
@@ -176,11 +224,13 @@ class AirgapSignerDialog(WindowModalDialog):
         self.window = window
         self.wallet = window.wallet
         self.payload = None
+        self.reply = None
         self.setMinimumSize(560, 460)
 
         self.vbox = QVBoxLayout(self)
         self.info_label = QLabel(_(
-            'Scan the transaction proposal shown on the online device.'))
+            'Scan the transaction proposal shown on the online device, or '
+            'load it from a file saved there.'))
         self.info_label.setWordWrap(True)
         self.vbox.addWidget(self.info_label)
 
@@ -200,10 +250,20 @@ class AirgapSignerDialog(WindowModalDialog):
         self.scan_b = QPushButton(_('Scan proposal...'))
         self.scan_b.clicked.connect(self._scan)
         buttons.addWidget(self.scan_b)
+        self.load_b = QPushButton(_('Load from file...'))
+        self.load_b.clicked.connect(lambda: _load_payload(
+            self, self.window, _('Load unsigned transaction'), self._on_proposal))
+        buttons.addWidget(self.load_b)
         self.sign_b = QPushButton(_('Sign'))
         self.sign_b.clicked.connect(self._sign)
         self.sign_b.hide()
         buttons.addWidget(self.sign_b)
+        self.save_b = QPushButton(_('Save to file...'))
+        self.save_b.clicked.connect(lambda: _save_payload(
+            self, self.window, self.reply, 'navio-signed.txt',
+            _('Save signed transaction')))
+        self.save_b.hide()
+        buttons.addWidget(self.save_b)
         buttons.addStretch()
         close_b = QPushButton(_('Close'))
         close_b.clicked.connect(self.reject)
@@ -262,14 +322,19 @@ class AirgapSignerDialog(WindowModalDialog):
 
         def task():
             reply = self.wallet.sign_airgap_proposal(payload, password=password)
-            return airgap.payload_to_fragments(reply)
+            return reply, airgap.payload_to_fragments(reply)
 
-        def on_success(fragments):
+        def on_success(result):
+            self.reply, fragments = result
             self.tree.hide()
             self.fee_label.setText('')
             self.sign_b.hide()
+            self.scan_b.hide()
+            self.load_b.hide()
+            self.save_b.show()
             self.info_label.setText(_(
-                'Signed. Scan this with the online device to broadcast:'))
+                'Signed. Scan this with the online device to broadcast, or '
+                'save it to a file and load it there:'))
             qr = AnimatedQRWidget(fragments)
             self.qr_holder.addWidget(qr)
 
