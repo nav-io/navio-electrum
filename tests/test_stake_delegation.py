@@ -115,3 +115,30 @@ class TestDelegationCrypto(ElectrumTestCase):
         self.assertEqual(
             self.delegate_pub.hex() + ':' + self.REWARD_ADDR,
             self.request.id())
+
+
+@unittest.skipUnless(HAVE_BLSCT, "navio-blsct bindings not installed")
+class TestDelegateKeyInput(ElectrumTestCase):
+
+    KEY = ('b0349444798ef33ba225bfcd30ef8bcc39ca30449721b255'
+           '4681ac9fc6297ae151038601eb0324132f06818aebdc5cab')
+
+    def _parse(self, s):
+        from electrum.blsct_wallet import Blsct_Wallet
+        w = object.__new__(Blsct_Wallet)
+        return Blsct_Wallet._parse_delegate_key(w, s)
+
+    def test_pasted_variants_accepted(self):
+        k = self.KEY
+        for s in (k, k.upper(), ' ' + k + '\n', k[:48] + '\n' + k[48:],
+                  '​' + k[:10] + '​' + k[10:] + '﻿', '0x' + k):
+            self.assertEqual(bytes.fromhex(k), self._parse(s), repr(s))
+
+    def test_bad_input_explained(self):
+        from electrum.util import UserFacingException
+        with self.assertRaisesRegex(UserFacingException, 'hexadecimal'):
+            self._parse(self.KEY[:-1] + 'g')
+        with self.assertRaisesRegex(UserFacingException, r'96 hex characters \(got 94\)'):
+            self._parse(self.KEY[:-2])
+        with self.assertRaisesRegex(UserFacingException, 'not a valid'):
+            self._parse('ff' * 48)

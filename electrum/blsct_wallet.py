@@ -11,6 +11,7 @@
 
 import asyncio
 import threading
+import unicodedata
 from typing import Optional, Dict, Tuple, List, Sequence, TYPE_CHECKING
 
 from aiorpcx import run_in_thread, ignore_after, RPCError
@@ -1255,15 +1256,33 @@ class Blsct_Wallet(Abstract_Wallet):
         self.keyring.ensure_keypool(STAKING_ACCOUNT, index + 1 + GAP_LIMIT)
         return self.keyring.address(STAKING_ACCOUNT, index)
 
+    @staticmethod
+    def _normalize_delegate_key(delegate_key_hex: str) -> str:
+        """Drop what copy/paste tends to drag along (line breaks inside the
+        key, zero-width characters from chat apps, a 0x prefix)."""
+        s = ''.join(c for c in delegate_key_hex
+                    if not c.isspace() and unicodedata.category(c) != 'Cf')
+        if s[:2].lower() == '0x':
+            s = s[2:]
+        return s.lower()
+
     def _parse_delegate_key(self, delegate_key_hex: str) -> bytes:
         b = navio_blsct.get_blsct()
+        key_hex = self._normalize_delegate_key(delegate_key_hex)
         try:
-            key_bytes = bytes.fromhex(delegate_key_hex)
-            if len(key_bytes) != stake_delegation.POINT_SIZE:
-                raise ValueError
-            if not b.Point.deserialize(delegate_key_hex).is_valid():
-                raise ValueError
+            key_bytes = bytes.fromhex(key_hex)
+        except ValueError:
+            raise UserFacingException(
+                'delegate key must be hexadecimal (0-9, a-f)')
+        if len(key_bytes) != stake_delegation.POINT_SIZE:
+            raise UserFacingException(
+                f'delegate key must be {2 * stake_delegation.POINT_SIZE} hex '
+                f'characters (got {len(key_hex)})')
+        try:
+            valid = b.Point.deserialize(key_hex).is_valid()
         except Exception:
+            valid = False
+        if not valid:
             raise UserFacingException('delegate key is not a valid 48-byte G1 point')
         return key_bytes
 
@@ -1376,7 +1395,7 @@ class Blsct_Wallet(Abstract_Wallet):
         navio_blsct.BuiltTx."""
         group = [u for u in self.get_staked_outputs() if u.d.get('height', 0) > 0]
         if delegate_key_hex:
-            key = delegate_key_hex.lower()
+            key = self._normalize_delegate_key(delegate_key_hex)
             group = [u for u in group
                      if (u.d.get('delegation') or {}).get('delegate_key') == key]
         else:
@@ -1432,7 +1451,7 @@ class Blsct_Wallet(Abstract_Wallet):
         keyring. -> (utxos, recipients, est_fee)"""
         group = [u for u in self.get_staked_outputs() if u.d.get('height', 0) > 0]
         if delegate_key_hex:
-            key = delegate_key_hex.lower()
+            key = self._normalize_delegate_key(delegate_key_hex)
             group = [u for u in group
                      if (u.d.get('delegation') or {}).get('delegate_key') == key]
         else:
