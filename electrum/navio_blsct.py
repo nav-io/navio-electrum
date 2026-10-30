@@ -604,7 +604,7 @@ class BlsctKeyRing:
             amount = b.get_amount_recovery_result_amount(rv.value, 0)
             memo = b.get_amount_recovery_result_msg(rv.value, 0)
             gamma_obj = b.get_amount_recovery_result_gamma(rv.value, 0)
-            gamma_hex = b.serialize_scalar(gamma_obj)
+            gamma_hex = scalar_hex(b.serialize_scalar(gamma_obj))
             return RecoveredAmount(int(amount), memo, gamma_hex)
         finally:
             b.free_amounts_ret_val(rv)
@@ -676,6 +676,13 @@ def _as_recipient(r) -> Recipient:
     return Recipient(addr, amount, memo or '')
 
 
+def scalar_hex(s: str) -> str:
+    """navio-blsct serializes scalars as minimal big-endian hex ('ff', not
+    '00..ff'); left-pad to the fixed 32-byte form wherever raw bytes are
+    needed. Also fixes up gammas already stored that way in wallet files."""
+    return s.zfill(64)
+
+
 def supports_data_predicate() -> bool:
     """Whether the installed navio-blsct bindings can attach a DATA predicate
     to an output before signing (needed for delegated cold staking)."""
@@ -702,7 +709,7 @@ def _attach_delegation(b, unsigned_output, rec: 'Recipient', blinding_key) -> No
     if gamma_obj is None:
         raise ValueError('could not read output gamma')
     try:
-        gamma = bytes.fromhex(b.serialize_scalar(gamma_obj))
+        gamma = bytes.fromhex(scalar_hex(b.serialize_scalar(gamma_obj)))
     finally:
         b.free_obj(gamma_obj)
     # the output's BLSCT nonce: destination view pubkey * output blinding key.

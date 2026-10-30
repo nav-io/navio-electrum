@@ -256,12 +256,13 @@ def make_proposal_payload(*, genesis_hex: str, fingerprint_hex: str,
                           subtract_fee_from_amount: bool = False) -> dict:
     """utxos: Sequence[navio_blsct.SpendableOutput];
     recipients: Sequence[navio_blsct.Recipient]."""
+    from . import navio_blsct
     ins = []
     for u in utxos:
         ins.append([
             bytes.fromhex(u.output_hash),
             u.amount,
-            bytes.fromhex(u.gamma_hex),
+            bytes.fromhex(navio_blsct.scalar_hex(u.gamma_hex)),
             bytes.fromhex(u.blinding_key_hex),
             u.account,
             u.index,

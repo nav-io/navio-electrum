@@ -191,3 +191,46 @@ class TestNavioCoreCompat(ElectrumTestCase):
         for i, expected in enumerate(self.CORE_ADDRS):
             self.assertEqual(expected, kr.address(0, i),
                              f'address (0,{i}) does not match navio-core')
+
+
+@unittest.skipUnless(HAVE_BLSCT, "navio-blsct bindings not installed")
+class TestShortScalarHex(ElectrumTestCase):
+    """navio-blsct serializes scalars without leading zeros; every gamma that
+    turns into bytes must be padded back to 32 bytes."""
+
+    def test_scalar_hex(self):
+        self.assertEqual('0' * 62 + 'ff', nb.scalar_hex('ff'))
+        self.assertEqual('a' * 64, nb.scalar_hex('a' * 64))
+
+    def test_delegated_stake_any_gamma(self):
+        # a fresh random gamma per build; ~1 in 16 starts with a zero nibble
+        import secrets
+        from electrum import stake_delegation as sd
+        b = nb.get_blsct()
+        kr = nb.BlsctKeyRing(bytes(range(32)).hex())
+        kr.ensure_keypool(0, 3)
+        kr.ensure_keypool(-1, 1)
+        key = bytes.fromhex(b.Point.from_scalar(b.Scalar(12345)).serialize())
+        amt = nb.MIN_STAKE_AMOUNT
+        rec = nb.Recipient(kr.address(0, 2), amt, '', 'StakedCommitment', amt,
+                           delegation=sd.DelegationRequest(key, kr.address(0, 1)))
+        for _ in range(64):
+            utxo = nb.SpendableOutput(
+                output_hash=secrets.token_hex(32), amount=2 * amt,
+                gamma_hex=b.Scalar(777).serialize(),
+                blinding_key_hex=b.PublicKey.random().serialize(),
+                account=0, index=1)
+            nb.build_signed_tx(kr, [utxo], [rec])
+
+    def test_airgap_proposal_short_stored_gamma(self):
+        import secrets
+        from electrum import airgap
+        utxo = nb.SpendableOutput(
+            output_hash=secrets.token_hex(32), amount=1000,
+            gamma_hex='fff',  # as stored by wallets before the fix
+            blinding_key_hex='aa' * 48, account=0, index=0)
+        payload = airgap.make_proposal_payload(
+            genesis_hex='00' * 32, fingerprint_hex='00' * 4,
+            utxos=[utxo], recipients=[], fee=0)
+        _, _, gamma = payload['ins'][0][:3]
+        self.assertEqual(bytes(30) + b'\x0f\xff', gamma)
