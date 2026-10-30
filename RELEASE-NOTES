@@ -1,3 +1,12 @@
+# Release 4.9.14 - (October 30, 2026)
+ * Air-gapped signing: transactions can now be passed between the
+   watch-only and the offline wallet as files (e.g. on a USB stick)
+   instead of QR codes. The watch-only wallet's signing dialog has
+   "Save to file..." for the unsigned transaction and "Load signed
+   transaction..."; the offline wallet's Air-gapped signer has "Load
+   from file..." and, after signing, "Save to file...".
+
+
 # Release 4.9.13 - (October 30, 2026)
  * Performance: wallets with a long staking history (tens of thousands
    of block rewards) no longer freeze for many seconds on every new
