@@ -5,6 +5,11 @@
    it. Pasted keys are now cleaned up (whitespace, zero-width characters
    and a 0x prefix are ignored), and an invalid key gets a specific
    message: not hexadecimal, wrong length, or not a valid key.
+ * BLSCT cold staking: delegating could fail at random (roughly one try
+   in sixteen) with "gamma must be a 32-byte scalar" or a fromhex error,
+   depending on the stake output's random blinding value. Fixed. The same
+   issue could break air-gapped proposals spending some outputs; that is
+   fixed as well, including for outputs already in the wallet.
 
 
 # Release 4.9.11 - (October 27, 2026)
