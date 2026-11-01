@@ -273,7 +273,8 @@ def payload_from_file_text(text: str) -> dict:
 
 def make_proposal_payload(*, genesis_hex: str, fingerprint_hex: str,
                           utxos, recipients, fee: int,
-                          subtract_fee_from_amount: bool = False) -> dict:
+                          subtract_fee_from_amount: bool = False,
+                          transcript_v2: bool = False) -> dict:
     """utxos: Sequence[navio_blsct.SpendableOutput];
     recipients: Sequence[navio_blsct.Recipient]."""
     from . import navio_blsct
@@ -309,6 +310,9 @@ def make_proposal_payload(*, genesis_hex: str, fingerprint_hex: str,
         'outs': outs,
         'fee': int(fee),
         'sub': bool(subtract_fee_from_amount),
+        # the offline signer has no chain height, so the online side decides
+        # whether outputs must use the range-proof v2 transcript
+        'pv2': bool(transcript_v2),
     }
 
 
@@ -341,6 +345,17 @@ def check_envelope(payload: dict, *, expected_type: str,
 
 def proposal_age_seconds(payload: dict) -> int:
     return max(0, int(time.time()) - int(payload.get('ts') or 0))
+
+
+def proposal_wants_transcript_v2(payload: dict) -> bool:
+    """Whether the signer must build v2 range proofs. Proposals from versions
+    before 4.9.15 lack the flag; assume v2 wherever the network has a v2
+    activation height configured, since the offline signer cannot tell."""
+    from . import constants
+    v = payload.get('pv2')
+    if isinstance(v, bool):
+        return v
+    return constants.net.BLSCT_PROOF_V2_HEIGHT < 2**31 - 1
 
 
 def proposal_to_plan(payload: dict):

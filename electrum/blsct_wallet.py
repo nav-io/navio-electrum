@@ -1509,7 +1509,8 @@ class Blsct_Wallet(Abstract_Wallet):
         from . import airgap
         utxos, recipients, fee = plan
         return airgap.make_proposal_payload(
-            **self._airgap_env(), utxos=utxos, recipients=recipients, fee=fee)
+            **self._airgap_env(), utxos=utxos, recipients=recipients, fee=fee,
+            transcript_v2=self._wants_transcript_v2())
 
     def make_send_proposal(self, recipients, *, domain_coins=None,
                            subtract_fee_from_amount: bool = False) -> dict:
@@ -1518,7 +1519,8 @@ class Blsct_Wallet(Abstract_Wallet):
             recipients, domain_coins, subtract_fee_from_amount)
         return airgap.make_proposal_payload(
             **self._airgap_env(), utxos=utxos, recipients=recs, fee=fee,
-            subtract_fee_from_amount=subtract_fee_from_amount)
+            subtract_fee_from_amount=subtract_fee_from_amount,
+            transcript_v2=self._wants_transcript_v2())
 
     def make_stake_proposal(self, amount: int, *,
                             delegate_key_hex: Optional[str] = None,
@@ -1584,7 +1586,7 @@ class Blsct_Wallet(Abstract_Wallet):
         built = navio_blsct.build_signed_tx(
             keyring, utxos, recipients, fixed_fee=fee,
             subtract_fee_from_amount=subtract,
-            transcript_v2=self._wants_transcript_v2())
+            transcript_v2=airgap.proposal_wants_transcript_v2(payload))
         return airgap.make_reply_payload(
             **self._airgap_env(), txid_hex=built.txid, raw_hex=built.raw_hex)
 

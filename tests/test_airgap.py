@@ -133,6 +133,30 @@ class TestAirgapFlow(ElectrumTestCase):
             payload_from_file_text(payload_to_file_text(reply)))
         self.assertEqual(len(txid), 64)
 
+    def test_signer_follows_proposal_transcript(self):
+        # the offline signer has no chain height; it must build the proof
+        # version the online wallet asked for, or the node rejects the tx
+        from unittest import mock
+        from electrum import navio_blsct
+        full, watch = self._make_wallets()
+        dest = full.keyring.address(0, 5)
+        real_build = navio_blsct.build_signed_tx
+        for online_v2 in (True, False):
+            with mock.patch.object(type(watch), '_wants_transcript_v2',
+                                   return_value=online_v2):
+                proposal = watch.make_send_proposal([(dest, 3_0000_0000, '')])
+            self.assertIs(proposal['pv2'], online_v2)
+            with mock.patch.object(navio_blsct, 'build_signed_tx',
+                                   wraps=real_build) as build:
+                full.sign_airgap_proposal(proposal)
+            self.assertIs(build.call_args.kwargs['transcript_v2'], online_v2)
+        # proposals from older versions carry no flag: v2 where it is armed
+        del proposal['pv2']
+        with mock.patch.object(navio_blsct, 'build_signed_tx',
+                               wraps=real_build) as build:
+            full.sign_airgap_proposal(proposal)
+        self.assertIs(build.call_args.kwargs['transcript_v2'], True)
+
     def test_bad_files_rejected(self):
         from electrum.airgap import payload_to_file_text, payload_from_file_text
         lines = payload_to_file_text({'t': 'x', 'pad': bytes(range(256)) * 8}).splitlines()
