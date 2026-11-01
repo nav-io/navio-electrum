@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
 MSG_PASSPHRASE_WARN_ISSUE4566 = _("Warning") + ": "\
                               + _("You have multiple consecutive whitespaces or leading/trailing "
-                                  "whitespaces in your passphrase.") + " " \
+                                  "whitespaces in your seedphrase extension.") + " " \
                               + _("This is discouraged.") + " " \
                               + _("Due to a bug, old versions of Navio Electrum will NOT be creating the "
                                   "same wallet as newer versions or other software.")

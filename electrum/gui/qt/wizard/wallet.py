@@ -706,13 +706,13 @@ class WCBlsctSeedExt(WalletWizardComponent):
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(self, parent, wizard, title=_('Seed Extension'))
         self.layout().addWidget(WWLabel('\n'.join([
-            _('You may extend your seed with a custom passphrase (BIP39).'),
+            _('You may extend your seed with a seedphrase extension (BIP39).'),
             _('It must be saved together with your seed; without it the seed '
               'restores a different, empty wallet.'),
             _('Note that this is NOT your encryption password.'),
             _('If you do not know what this is, leave it disabled.'),
         ])))
-        self.cb = QCheckBox(_('Extend this seed with a passphrase'))
+        self.cb = QCheckBox(_('Extend this seed with a seedphrase extension'))
         self.layout().addWidget(self.cb)
         self.ext_e = QLineEdit()
         self.ext_e.setEnabled(False)

@@ -304,7 +304,7 @@ class Commands(Logger):
 
         arg:bool:encrypt_file:Whether the file on disk should be encrypted with the provided password
         arg:int:creation_height:Block height to start scanning from (default: 0)
-        arg:str:seed_passphrase:Optional BIP39 passphrase extending the seed (navio-core compatible)
+        arg:str:seed_passphrase:Optional BIP39 seedphrase extension (navio-core compatible)
         """
         from .blsct_wallet import create_new_blsct_wallet
         d = create_new_blsct_wallet(
@@ -330,7 +330,7 @@ class Commands(Logger):
         arg:str:text:24-word seed phrase, hex seed, or view key string
         arg:bool:encrypt_file:Whether the file on disk should be encrypted with the provided password
         arg:int:creation_height:Block height to start scanning from (0 = full rescan)
-        arg:str:seed_passphrase:Optional BIP39 passphrase the seed was extended with (navio-core compatible)
+        arg:str:seed_passphrase:Optional BIP39 seedphrase extension the seed was extended with (navio-core compatible)
         """
         from .blsct_wallet import restore_blsct_wallet_from_text
         d = restore_blsct_wallet_from_text(
