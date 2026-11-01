@@ -1,3 +1,9 @@
+# Release 4.9.16 - (November 1, 2026)
+ * Wording: the optional BIP39 passphrase that extends a seed is now
+   called a "seedphrase extension" in the new-wallet wizard, the seed
+   dialog and the command-line help.
+
+
 # Release 4.9.15 - (November 1, 2026)
  * Air-gapped signing: transactions signed by the offline wallet were
    rejected by the network with "missing-blsct-proof-v2-flag". Having
