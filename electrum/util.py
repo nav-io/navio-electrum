@@ -1394,6 +1394,21 @@ def _make_aiohttp_session(proxy: Optional['ProxySettings'], headers=None, timeou
     return aiohttp.ClientSession(headers=headers, timeout=timeout, connector=connector)
 
 
+_BARE_URL_RE = re.compile(r'(?<![(<\[\'"=])\bhttps?://[^\s<>()\[\]]+')
+
+
+def _autolink_bare_urls(md: str) -> str:
+    """Wrap bare URLs in CommonMark autolinks (<url>). Qt's markdown
+    extension autolinker stops at '...', which breaks GitHub compare URLs
+    like .../compare/v1.0...v1.1. URLs already inside markdown links,
+    autolinks or HTML attributes are left alone."""
+    def repl(m):
+        url = m.group(0)
+        stripped = url.rstrip('.,;:!?\'"')
+        return f'<{stripped}>{url[len(stripped):]}'
+    return _BARE_URL_RE.sub(repl, md)
+
+
 async def fetch_navio_update_info(*, proxy=None, timeout=120):
     """Query GitHub for releases of nav-io/navio-electrum newer than the
     running version. Returns (latest_version_str, changelog_markdown) where
@@ -1421,7 +1436,7 @@ async def fetch_navio_update_info(*, proxy=None, timeout=120):
     newer.sort(key=lambda x: x[0], reverse=True)
     parts = []
     for ver, rel in newer:
-        body = (rel.get('body') or '').strip()
+        body = _autolink_bare_urls((rel.get('body') or '').strip())
         parts.append(f"# {rel.get('name') or rel.get('tag_name')}\n\n{body}")
     return str(newer[0][0]), '\n\n---\n\n'.join(parts)
 
