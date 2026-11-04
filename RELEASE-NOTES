@@ -1,3 +1,17 @@
+# Release 4.9.17 - (November 4, 2026)
+ * Privacy: sends are now aggregated with other people's coins. The
+   wallet collects cover transactions from the Navio p2p network and
+   merges some into each send, so an observer can no longer tell which
+   inputs and outputs belong to you. The fee is the same as for a plain
+   send of that size. If the network rejects the merged transaction,
+   your send goes out on its own.
+ * Privacy: while the wallet is unlocked, it offers its own coins as
+   covers for other people's sends. Each offered coin goes back to the
+   address it came from, at no fee, and these transfers are hidden from
+   the history. Both features can be turned off in Settings > Misc.
+ * Update check: links in the changelog are no longer cut off at "...".
+
+
 # Release 4.9.16 - (November 1, 2026)
  * Wording: the optional BIP39 passphrase that extends a seed is now
    called a "seedphrase extension" in the new-wallet wizard, the seed
