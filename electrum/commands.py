@@ -485,6 +485,18 @@ class Commands(Logger):
         arg:str:tx:Serialized transaction (must be hexadecimal)
         """
         from .blsct_wallet import Blsct_Wallet
+        from .navio_blsct import parse_tx_hex
+        # an aggregate built by an open wallet (payto/paytomany): let that
+        # wallet broadcast it, so a rejected aggregate falls back to the plain
+        # tx and the send keeps its stable reference
+        if self.daemon:
+            try:
+                built_txid = parse_tx_hex(tx).txid
+            except Exception:
+                built_txid = None
+            for w in self.daemon.get_wallets().values():
+                if isinstance(w, Blsct_Wallet) and built_txid in w._pending_aggregates:
+                    return await w.broadcast_blsct_transaction(tx)
         txid = await self.network.interface.session.send_request(
             'blockchain.transaction.broadcast', [tx], timeout=30)
         # let open blsct wallets register their own outputs/spends

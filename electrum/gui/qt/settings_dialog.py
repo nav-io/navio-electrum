@@ -196,6 +196,23 @@ class SettingsDialog(QDialog, QtEventListener):
             self.config.AUTOMATIC_CENTRALIZED_UPDATE_CHECKS = updatecheck_cb.isChecked()
         updatecheck_cb.stateChanged.connect(on_set_updatecheck)
 
+        aggregate_cb = checkbox_from_configvar(self.config.cv.BLSCT_AGGREGATE_SENDS)
+        aggregate_cb.setChecked(self.config.BLSCT_AGGREGATE_SENDS)
+
+        def on_set_aggregate(_x):
+            # the cover puller starts/stops with the wallet: applies after reopening it
+            self.config.BLSCT_AGGREGATE_SENDS = aggregate_cb.isChecked()
+            self.need_restart = True
+        aggregate_cb.stateChanged.connect(on_set_aggregate)
+
+        serve_cb = checkbox_from_configvar(self.config.cv.BLSCT_SERVE_CANDIDATES)
+        serve_cb.setChecked(self.config.BLSCT_SERVE_CANDIDATES)
+
+        def on_set_serve(_x):
+            self.config.BLSCT_SERVE_CANDIDATES = serve_cb.isChecked()
+            self.need_restart = True
+        serve_cb.stateChanged.connect(on_set_serve)
+
         filelogging_cb = checkbox_from_configvar(self.config.cv.WRITE_LOGS_TO_DISK)
         filelogging_cb.setChecked(self.config.WRITE_LOGS_TO_DISK)
 
@@ -371,6 +388,8 @@ class SettingsDialog(QDialog, QtEventListener):
         fiat_widgets.append((self.history_rates_cb, None))
         misc_widgets = []
         misc_widgets.append((updatecheck_cb, None))
+        misc_widgets.append((aggregate_cb, None))
+        misc_widgets.append((serve_cb, None))
         misc_widgets.append((filelogging_cb, None))
         misc_widgets.append((screenshot_protection_cb, None))
         misc_widgets.append((alias_label, self.alias_e))

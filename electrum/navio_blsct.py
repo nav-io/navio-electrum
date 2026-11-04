@@ -683,6 +683,13 @@ def scalar_hex(s: str) -> str:
     return s.zfill(64)
 
 
+def supports_fee_free_signing() -> bool:
+    """Whether the installed navio-blsct bindings can sign without the fee
+    output (needed to serve aggregation cover candidates)."""
+    b = get_blsct()
+    return hasattr(b, 'set_unsigned_transaction_emit_fee_output')
+
+
 def supports_data_predicate() -> bool:
     """Whether the installed navio-blsct bindings can attach a DATA predicate
     to an output before signing (needed for delegated cold staking)."""
@@ -741,6 +748,9 @@ def build_signed_tx(keyring: BlsctKeyRing,
                     fixed_fee: Optional[int] = None,
                     subtract_fee_from_amount: bool = False,
                     transcript_v2: bool = False,
+                    extra_size: int = 0,
+                    cover_count: int = 0,
+                    emit_fee_output: bool = True,
                     ) -> BuiltTx:
     """Build and sign a BLSCT transaction.
 
@@ -749,10 +759,23 @@ def build_signed_tx(keyring: BlsctKeyRing,
     recipients: list of (nav1... address, amount, memo).
     A change output back to `change_address_pair` is added automatically.
     The fee is found iteratively so that fee >= required_fee(size), unless
-    fixed_fee is given.
+    fixed_fee is given. `extra_size` bytes are added to the size the fee is
+    computed for: the `cover_count` cover candidates an aggregate will merge
+    in. Each cover is priced like one more input plus one more recipient, so
+    the aggregate's fee follows the same formula as a plain send of the same
+    input/output counts and does not stand out.
+    With emit_fee_output=False the tx carries no fee output (an aggregation
+    cover candidate); the fee must then be fixed at 0 and the recipients must
+    take the whole input value.
     """
     b = get_blsct()
     recipients = [_as_recipient(r) for r in recipients]
+    if not emit_fee_output:
+        if fixed_fee != 0:
+            raise ValueError('a tx without fee output must have fixed_fee=0')
+        if not supports_fee_free_signing():
+            raise ValueError('the installed navio-blsct bindings cannot sign '
+                             'without a fee output; upgrade the navio-blsct package')
     if subtract_fee_from_amount and len(recipients) != 1:
         raise ValueError('subtract_fee_from_amount requires exactly one recipient')
     if subtract_fee_from_amount and recipients[0].output_type != 'Normal':
@@ -843,6 +866,8 @@ def build_signed_tx(keyring: BlsctKeyRing,
                 b.add_unsigned_transaction_output(utx, rv.value)
                 b.free_obj(rv)
             b.set_unsigned_transaction_fee(utx, fee)
+            if not emit_fee_output:
+                b.set_unsigned_transaction_emit_fee_output(utx, False)
             rv = b.sign_unsigned_transaction(utx)
             if int(rv.result) != 0:
                 b.free_obj(rv)
@@ -862,10 +887,10 @@ def build_signed_tx(keyring: BlsctKeyRing,
         fee = fixed_fee
     else:
         # initial coarse estimate, then fixpoint on actual size
-        fee = (len(utxos) + len(recipients) + 2) * DEFAULT_FEE_PER_COMPONENT
+        fee = (len(utxos) + len(recipients) + 2 + 2 * cover_count) * DEFAULT_FEE_PER_COMPONENT
         raw = build_with_fee(fee)
         for _ in range(6):
-            required = _required_fee(len(raw) // 2)
+            required = _required_fee(len(raw) // 2 + extra_size)
             if fee >= required:
                 break
             fee = required
@@ -875,6 +900,137 @@ def build_signed_tx(keyring: BlsctKeyRing,
 
     parsed = parse_tx_hex(raw)
     return BuiltTx(raw, parsed.txid, fee)
+
+# ---------------------------------------------------------------------------
+# Aggregation with cover candidates
+# ---------------------------------------------------------------------------
+# An aggregated send merges this wallet's signed half with fee-0, 1-in/1-out
+# cover candidates of other wallets (pulled over p2pmsg, see blsct_p2pmsg).
+# The BLS signatures aggregate and the balance proof is order-independent, so
+# the merged tx is valid as long as exactly one half (ours) carries the fee
+# output and that fee covers the merged size. Inputs and outputs are shuffled
+# so their order does not reveal which ones belong together (mirrors
+# navio-core aggregation::CombineHalves).
+
+BLSCT_MARKER = 1 << 5
+TXSIG_SIZE = 96
+# per-tx bytes a merged candidate does NOT add to the aggregate: version,
+# 1-byte in/out counts, locktime and its own txSig
+CANDIDATE_OVERHEAD = 4 + 1 + 1 + 4 + TXSIG_SIZE
+
+
+class SplitTx(NamedTuple):
+    version: int
+    inputs: List[bytes]      # raw serialized inputs
+    outputs: List[bytes]     # raw serialized outputs
+    locktime: int
+    sig: bytes
+
+
+def _ser_compact_size(n: int) -> bytes:
+    if n < 0xfd:
+        return bytes([n])
+    if n <= 0xffff:
+        return b'\xfd' + n.to_bytes(2, 'little')
+    if n <= 0xffffffff:
+        return b'\xfe' + n.to_bytes(4, 'little')
+    return b'\xff' + n.to_bytes(8, 'little')
+
+
+def split_blsct_tx(raw: bytes) -> SplitTx:
+    """Split a (non-witness encoded) BLSCT tx into its raw parts."""
+    if len(raw) > 4 and raw[4] == 0:
+        raise ValueError('witness-encoded transaction not supported')
+    c = _Cursor(raw)
+    version = int.from_bytes(c.read(4), 'little', signed=True)
+    if not version & BLSCT_MARKER:
+        raise ValueError('not a BLSCT transaction')
+    inputs = []
+    for _ in range(c.read_varint()):
+        start = c.pos
+        c.read(32)
+        c.read_varbytes()
+        c.read(4)
+        inputs.append(raw[start:c.pos])
+    outputs = []
+    for _ in range(c.read_varint()):
+        start = c.pos
+        parse_tx_out(c)
+        outputs.append(raw[start:c.pos])
+    locktime = c.read_le_uint32()
+    sig = c.read(TXSIG_SIZE)
+    if c.pos != len(raw):
+        raise ValueError('trailing bytes after transaction')
+    return SplitTx(version, inputs, outputs, locktime, sig)
+
+
+def serialize_split_tx(t: SplitTx) -> bytes:
+    return (t.version.to_bytes(4, 'little', signed=True)
+            + _ser_compact_size(len(t.inputs)) + b''.join(t.inputs)
+            + _ser_compact_size(len(t.outputs)) + b''.join(t.outputs)
+            + t.locktime.to_bytes(4, 'little') + t.sig)
+
+
+def cover_extra_size(cover_raws: Sequence[bytes]) -> int:
+    """Bytes the covers add to an aggregate beyond the own half."""
+    return sum(max(len(r) - CANDIDATE_OVERHEAD, 0) for r in cover_raws)
+
+
+def _is_fee_output(raw_out: bytes) -> bool:
+    out = parse_tx_out(_Cursor(raw_out))
+    return not out.has_blsct and out.script == b'\x6a'
+
+
+def combine_with_covers(own_hex: str, cover_raws: Sequence[bytes]) -> str:
+    """Merge our signed half with cover candidates into one transaction with
+    a single fee output (ours) and shuffled inputs and outputs."""
+    import secrets
+    own = split_blsct_tx(bytes.fromhex(own_hex))
+    if sum(1 for o in own.outputs if _is_fee_output(o)) != 1:
+        raise ValueError('own half must carry exactly one fee output')
+    seen = set(own.inputs[i][:32] for i in range(len(own.inputs)))
+    for r in cover_raws:
+        cov = split_blsct_tx(r)
+        if len(cov.inputs) != 1 or len(cov.outputs) != 1 or _is_fee_output(cov.outputs[0]):
+            raise ValueError('cover must be a fee-free 1-in/1-out tx')
+        prevout = cov.inputs[0][:32]
+        if prevout in seen:
+            raise ValueError('cover spends an input already in the aggregate')
+        seen.add(prevout)
+    if not cover_raws:
+        return own_hex
+    # the bindings aggregate the BLS signatures (and would merge fee outputs,
+    # of which only ours exists); they keep the parts in order, so shuffle
+    b = get_blsct()
+    vec = b.create_tx_hex_vec()
+    try:
+        b.add_to_tx_hex_vec(vec, own_hex)
+        for r in cover_raws:
+            b.add_to_tx_hex_vec(vec, r.hex())
+        rv = b.aggregate_transactions(vec)
+        try:
+            if int(rv.result) != 0:
+                raise ValueError(f'aggregate_transactions failed: {rv.result}')
+            agg_hex = bytes.fromhex(b.buf_to_malloced_hex_c_str(
+                b.cast_to_uint8_t_ptr(rv.value), rv.value_size - 1)).decode('ascii')
+        finally:
+            b.free_obj(rv)
+    finally:
+        b.delete_tx_hex_vec(vec)
+    agg = split_blsct_tx(bytes.fromhex(agg_hex))
+    n_in = len(own.inputs) + len(cover_raws)
+    n_out = len(own.outputs) + len(cover_raws)
+    if (len(agg.inputs) != n_in or len(agg.outputs) != n_out
+            or sum(1 for o in agg.outputs if _is_fee_output(o)) != 1):
+        raise ValueError('unexpected aggregate shape')
+    rng = secrets.SystemRandom()
+    inputs, outputs = list(agg.inputs), list(agg.outputs)
+    rng.shuffle(inputs)
+    rng.shuffle(outputs)
+    # version: the bindings set BLSCT_MARKER plus the proof-v2 marker if any
+    # half carries it, like CombineHalves
+    return serialize_split_tx(agg._replace(inputs=inputs, outputs=outputs)).hex()
+
 
 # ---------------------------------------------------------------------------
 # Token creation / minting

@@ -10,9 +10,11 @@
 # the navio-sdk reference implementation.
 
 import asyncio
+import socket
 import threading
+import time
 import unicodedata
-from typing import Optional, Dict, Tuple, List, Sequence, TYPE_CHECKING
+from typing import Optional, Dict, Tuple, List, NamedTuple, Sequence, TYPE_CHECKING
 
 from aiorpcx import run_in_thread, ignore_after, RPCError
 from aiorpcx.jsonrpc import JSONRPC
@@ -22,12 +24,13 @@ from . import constants
 from .bitcoin import COINBASE_MATURITY
 from .i18n import _
 from .util import (NetworkJobOnDefaultServer, NotEnoughFunds,
-                   UserFacingException, OldTaskGroup)
+                   UserFacingException, OldTaskGroup, ESocksProxy, event_listener)
 from .crypto import pw_encode, pw_decode
 from .keystore import KeyStore
 from .logging import Logger
 from .wallet import (Abstract_Wallet, register_wallet_type, PiechartBalance,
                      register_constructor)
+from . import blsct_p2pmsg
 from . import navio_blsct
 from . import stake_delegation
 from .navio_blsct import (BlsctKeyRing, SpendableOutput, Recipient, parse_tx_hex,
@@ -285,6 +288,14 @@ class Blsct_Wallet(Abstract_Wallet):
         self.blsct_outputs = db.get_dict('blsct_outputs')
         self.blsct_sync = db.get_dict('blsct_sync')
         self.blsct_synchronizer = None  # type: Optional[BlsctSynchronizer]
+        self.cover_puller = None  # type: Optional[blsct_p2pmsg.CandidatePuller]
+        # aggregate txid -> PendingAggregate, for the broadcast fallback
+        self._pending_aggregates = {}  # type: Dict[str, PendingAggregate]
+        # serving: coins out in a live candidate (output hash -> expiry), and
+        # when each candidate was served (for the hourly budget)
+        self._served_inputs = {}  # type: Dict[str, float]
+        self._served_times = []  # type: List[float]
+        self._serve_lock = threading.Lock()
         Abstract_Wallet.__init__(self, db, config=config)
         self._rebuild_address_index()
         self._ensure_addresses()
@@ -829,7 +840,12 @@ class Blsct_Wallet(Abstract_Wallet):
         One item per txid: received minus spent. Block rewards are the
         exception: a received output carrying the coinbase's "Reward" memo
         is always its own item, even when the block aggregated the reward
-        with other outputs of ours under the same txid."""
+        with other outputs of ours under the same txid.
+
+        A transaction that spends our coins and pays the same amount back to
+        us is left out: that is one of our coins used as a fee-0 cover in
+        another wallet's aggregated send (the aggregator pays the fee), not
+        a payment. Our own self-transfers pay a fee, so they still show."""
         events = {}
         with self._blsct_lock:
             for ohash, d in self.blsct_outputs.items():
@@ -839,7 +855,7 @@ class Blsct_Wallet(Abstract_Wallet):
                 if rtx:
                     key = (rtx, 'reward') if d.get('memo') == REWARD_MEMO else rtx
                     ev = events.setdefault(key, {'height': d.get('height', 0), 'delta': 0, 'memos': [],
-                                                 'recv_hashes': [], 'spent_ref': None})
+                                                 'recv_hashes': [], 'spent_ref': None, 'n_spent': 0})
                     ev['delta'] += d['amount']
                     ev['height'] = d.get('height', 0)
                     ev['recv_hashes'].append(ohash)
@@ -848,8 +864,9 @@ class Blsct_Wallet(Abstract_Wallet):
                 stx = d.get('spent_by')
                 if stx:
                     ev = events.setdefault(stx, {'height': d.get('spent_height', 0), 'delta': 0, 'memos': [],
-                                                 'recv_hashes': [], 'spent_ref': None})
+                                                 'recv_hashes': [], 'spent_ref': None, 'n_spent': 0})
                     ev['delta'] -= d['amount']
+                    ev['n_spent'] += 1
                     ev['height'] = d.get('spent_height', 0)
                     if d.get('spent_ref') and not ev['spent_ref']:
                         ev['spent_ref'] = d['spent_ref']
@@ -859,6 +876,8 @@ class Blsct_Wallet(Abstract_Wallet):
         ordered = sorted(events.items(), key=lambda kv: not isinstance(kv[0], tuple))
         for key, ev in ordered:
             txid = key[0] if isinstance(key, tuple) else key
+            if ev['delta'] == 0 and ev['n_spent'] and ev['recv_hashes']:
+                continue  # our coin served as an aggregation cover
             # user-facing reference: an output hash, not the txid. BLSCT
             # txids mutate when a block aggregates transactions; output
             # hashes are stable, and navio-core references transactions
@@ -1022,6 +1041,8 @@ class Blsct_Wallet(Abstract_Wallet):
         try:
             async with self.taskgroup as group:
                 await group.spawn(asyncio.Event().wait)  # run forever
+                if self._p2p_enabled():
+                    await group.spawn(self._run_cover_puller())
         except Exception:
             self.logger.exception("taskgroup died.")
         finally:
@@ -1038,6 +1059,8 @@ class Blsct_Wallet(Abstract_Wallet):
 
     async def stop(self):
         self.unregister_callbacks()
+        if self.cover_puller:
+            self.cover_puller.stop()
         try:
             async with ignore_after(5):
                 if self.blsct_synchronizer:
@@ -1221,18 +1244,209 @@ class Blsct_Wallet(Abstract_Wallet):
     def create_blsct_transaction(self, recipients: Sequence[Tuple[str, int, str]],
                                  password=None, fixed_fee: Optional[int] = None,
                                  domain_coins: Optional[Sequence[str]] = None,
-                                 subtract_fee_from_amount: bool = False):
+                                 subtract_fee_from_amount: bool = False,
+                                 aggregate: bool = True):
         """recipients: [(nav1 address, amount_sats, memo)]
-        Returns navio_blsct.BuiltTx."""
+        Returns navio_blsct.BuiltTx.
+
+        With `aggregate` (and no fixed fee) the send is merged with cover
+        candidates when the background puller has any; the fee then also
+        pays for the covers. The plain tx is kept and broadcast instead if
+        the network rejects the aggregate."""
         keyring = self._spending_keyring(password)
         utxos, recs, _fee = self._plan_send(
             recipients, domain_coins, subtract_fee_from_amount)
-        built = navio_blsct.build_signed_tx(
+        plain = navio_blsct.build_signed_tx(
             keyring, utxos, recs,
             fixed_fee=fixed_fee,
             subtract_fee_from_amount=subtract_fee_from_amount,
             transcript_v2=self._wants_transcript_v2())
-        return built
+        if fixed_fee is not None or not aggregate or not self.config.BLSCT_AGGREGATE_SENDS:
+            return plain
+        built = self._build_aggregated(
+            keyring, utxos, recs, plain=plain,
+            subtract_fee_from_amount=subtract_fee_from_amount,
+            transcript_v2=self._wants_transcript_v2())
+        return built or plain
+
+    # ------------------------------------------------------------ aggregation
+
+    def _cover_aggregation_enabled(self) -> bool:
+        if not self.config.BLSCT_AGGREGATE_SENDS or self.is_watching_only():
+            return False
+        # mainnet has seeds; elsewhere only with configured relays
+        return constants.net.NET_NAME == 'mainnet' or bool(self.config.BLSCT_P2P_PEERS)
+
+    def _serving_enabled(self) -> bool:
+        if (not self.config.BLSCT_SERVE_CANDIDATES or self.is_watching_only()
+                or not navio_blsct.supports_fee_free_signing()):
+            return False
+        return constants.net.NET_NAME == 'mainnet' or bool(self.config.BLSCT_P2P_PEERS)
+
+    def _p2p_enabled(self) -> bool:
+        return self._cover_aggregation_enabled() or self._serving_enabled()
+
+    def make_served_candidate(self) -> Optional[bytes]:
+        """A fee-0, 1-in/1-out self-spend of one of our coins for another
+        wallet's aggregate, or None. Mirrors naviod's BuildAndSendCandidate:
+        a random free NAV coin (each live candidate spends a distinct one,
+        reserved for the requester's key lifetime), at most
+        SERVE_MAX_COINS_PER_WINDOW coins per hour, only while the wallet can
+        sign without asking for the password. The coin goes back to the
+        sub-address it came from, with a random blinding key."""
+        import secrets
+        if not self.config.BLSCT_SERVE_CANDIDATES or not self._serving_enabled():
+            return None
+        password = None
+        if self.has_keystore_encryption():
+            password = self.get_unlocked_password()
+            if password is None:
+                return None
+        now = time.time()
+        with self._serve_lock:
+            self._served_times = [t for t in self._served_times
+                                  if t + blsct_p2pmsg.SERVE_WINDOW > now]
+            if len(self._served_times) >= blsct_p2pmsg.SERVE_MAX_COINS_PER_WINDOW:
+                return None
+            self._served_inputs = {h: t for h, t in self._served_inputs.items() if t > now}
+            coins = [c for c in self.get_spendable_coins()
+                     if not c.d.get('token_id') and not c.d.get('staked')
+                     and c.d.get('height', 0) > 0
+                     and c.output_hash not in self._served_inputs
+                     and c.d.get('account') in (MAIN_ACCOUNT, CHANGE_ACCOUNT)]
+            if not coins:
+                return None
+            coin = secrets.choice(coins)
+            # reserve before building, outside the lock nobody else can pick it
+            self._served_inputs[coin.output_hash] = now + blsct_p2pmsg.PULL_KEY_TTL
+            self._served_times.append(now)
+        try:
+            keyring = self._spending_keyring(password)
+            u = self._coin_to_spendable(coin)
+            built = navio_blsct.build_signed_tx(
+                keyring, [u], [Recipient(keyring.address(u.account, u.index), u.amount, 'candidate')],
+                fixed_fee=0, emit_fee_output=False,
+                transcript_v2=self._wants_transcript_v2())
+        except Exception as e:
+            with self._serve_lock:
+                self._served_inputs.pop(coin.output_hash, None)
+                if now in self._served_times:
+                    self._served_times.remove(now)
+            self.logger.info(f'could not build a cover candidate: {e!r}')
+            return None
+        return bytes.fromhex(built.raw_hex)
+
+    async def _p2p_open_connection(self, host, port):
+        # looked up per connect, so a proxy change applies to new connections
+        proxy = ESocksProxy.from_network_settings(self.network)
+        if proxy:
+            return await proxy.open_connection(host, port)
+        return await asyncio.open_connection(host, port)
+
+    async def _cover_puller_seeds(self) -> List[Tuple[str, int]]:
+        peers = []
+        for entry in self.config.BLSCT_P2P_PEERS or []:
+            try:
+                host, port = str(entry).rsplit(':', 1)
+                peers.append((host.strip('[]'), int(port)))
+            except ValueError:
+                self.logger.info(f'ignoring bad blsct_p2p_peers entry {entry!r}')
+        if constants.net.NET_NAME == 'mainnet':
+            port = blsct_p2pmsg.MAINNET_PORT
+            for seed in blsct_p2pmsg.MAINNET_SEEDS:
+                if ESocksProxy.from_network_settings(self.network):
+                    peers.append((seed, port))  # resolved by the proxy: no local DNS
+                    continue
+                try:
+                    infos = await asyncio.get_running_loop().getaddrinfo(
+                        seed, port, type=socket.SOCK_STREAM)
+                except OSError as e:
+                    self.logger.info(f'could not resolve {seed}: {e!r}')
+                    continue
+                for info in infos:
+                    if (info[4][0], port) not in peers:
+                        peers.append((info[4][0], port))
+        return peers
+
+    async def _run_cover_puller(self):
+        known = []
+        for entry in self.config.BLSCT_P2P_KNOWN_PEERS or []:
+            try:
+                known.append((str(entry[0]), int(entry[1])))
+            except (TypeError, ValueError, IndexError):
+                pass
+        magic = (blsct_p2pmsg.MAINNET_MAGIC if constants.net.NET_NAME == 'mainnet'
+                 else blsct_p2pmsg.TESTNET_MAGIC)
+
+        def save_good(peers):
+            self.config.BLSCT_P2P_KNOWN_PEERS = [[h, p] for h, p in peers]
+
+        self.cover_puller = blsct_p2pmsg.CandidatePuller(
+            peers=await self._cover_puller_seeds(), magic=magic, known_good=known,
+            open_connection=self._p2p_open_connection, on_good_peers=save_good,
+            is_input_spent=self._is_own_spent_input,
+            pull=self._cover_aggregation_enabled(),
+            candidate_provider=(self.make_served_candidate
+                                if self._serving_enabled() else None))
+        try:
+            await self.cover_puller.run()
+        finally:
+            self.cover_puller = None
+
+    def _is_own_spent_input(self, output_hash: str) -> bool:
+        # we can only tell for our own outputs (e.g. after a restore from
+        # another device that served covers); others fail at broadcast
+        d = self.blsct_outputs.get(output_hash)
+        return bool(d and d.get('spent_by'))
+
+    @event_listener
+    def on_event_proxy_set(self, *args):
+        if self.cover_puller:
+            self.cover_puller.disconnect_all()
+
+    def _take_covers(self, utxos: Sequence[SpendableOutput]):
+        puller = self.cover_puller
+        if puller is None:
+            return []
+        n = min(-(-len(utxos) // blsct_p2pmsg.COVER_INPUT_RATIO),
+                blsct_p2pmsg.POOL_MAX_COMBINED)
+        own = {u.output_hash for u in utxos}
+        return puller.take(n, exclude_inputs=own)
+
+    def _build_aggregated(self, keyring, utxos, recs, *, plain, subtract_fee_from_amount,
+                          transcript_v2) -> Optional[navio_blsct.BuiltTx]:
+        """Our half sized and funded for the covers, merged with them. The
+        plain tx is kept for a fallback broadcast. None if no covers."""
+        covers = self._take_covers(utxos)
+        if not covers:
+            return None
+        try:
+            raws = [c.raw for c in covers]
+            own = navio_blsct.build_signed_tx(
+                keyring, utxos, recs,
+                subtract_fee_from_amount=subtract_fee_from_amount,
+                transcript_v2=transcript_v2,
+                extra_size=navio_blsct.cover_extra_size(raws),
+                cover_count=len(raws))
+            agg_hex = navio_blsct.combine_with_covers(own.raw_hex, raws)
+            if own.fee < navio_blsct._required_fee(len(agg_hex) // 2):
+                raise ValueError('aggregate fee below the required minimum')
+        except NotEnoughFunds:
+            # the covers' share of the fee does not fit: send without them
+            self.cover_puller and self.cover_puller.put_back(covers)
+            return None
+        except Exception as e:
+            self.logger.warning(f'aggregation failed, sending plain: {e!r}')
+            return None
+        # stable reference from our half: the merged tx has foreign outputs
+        # that our view key does not recover either
+        ref = self.blsct_tx_reference(parse_tx_hex(own.raw_hex))
+        agg = parse_tx_hex(agg_hex)
+        while len(self._pending_aggregates) >= 16:   # built but never broadcast
+            self._pending_aggregates.pop(next(iter(self._pending_aggregates)))
+        self._pending_aggregates[agg.txid] = PendingAggregate(ref, covers, plain)
+        self.logger.info(f'aggregated send with {len(covers)} cover(s): {agg.txid}')
+        return navio_blsct.BuiltTx(agg_hex, agg.txid, own.fee)
 
     # ---------------------------------------------------------------- staking
 
@@ -1607,9 +1821,22 @@ class Blsct_Wallet(Abstract_Wallet):
     async def broadcast_blsct_transaction(self, raw_hex: str) -> str:
         if not self.network or not self.network.interface:
             raise UserFacingException('not connected')
-        txid = await self.network.interface.session.send_request(
-            'blockchain.transaction.broadcast', [raw_hex], timeout=30)
-        ref = self.process_own_transaction(raw_hex, txid)
+        pending = self._pending_aggregates.pop(parse_tx_hex(raw_hex).txid, None)
+        try:
+            txid = await self.network.interface.session.send_request(
+                'blockchain.transaction.broadcast', [raw_hex], timeout=30)
+        except RPCError as e:
+            # an explicit rejection (a timeout may still have gone through):
+            # most likely a cover's input is spent. Send our half alone.
+            if pending is None:
+                raise
+            self.logger.info(f'aggregate rejected ({e!r}); broadcasting plain tx')
+            raw_hex = pending.fallback.raw_hex
+            pending = None
+            txid = await self.network.interface.session.send_request(
+                'blockchain.transaction.broadcast', [raw_hex], timeout=30)
+        ref = self.process_own_transaction(raw_hex, txid,
+                                           ref=pending.ref if pending else None)
         self.save_db()
         util.trigger_callback('wallet_updated', self)
         # return the stable output-hash reference (txids mutate on
@@ -1634,11 +1861,13 @@ class Blsct_Wallet(Abstract_Wallet):
                 return out.output_hash
         return fallback
 
-    def process_own_transaction(self, raw_hex: str, txid: str) -> Optional[str]:
+    def process_own_transaction(self, raw_hex: str, txid: str,
+                                ref: Optional[str] = None) -> Optional[str]:
         """Mark inputs spent and pick up our own (change) outputs from a tx
         we just broadcast. Returns the stable output-hash reference."""
         parsed = parse_tx_hex(raw_hex)
-        ref = self.blsct_tx_reference(parsed)
+        if ref is None:
+            ref = self.blsct_tx_reference(parsed)
         for tin in parsed.inputs:
             self._mark_spent(tin.prevout_hash, txid, 0, ref=ref)
         for out in parsed.outputs:
@@ -1661,6 +1890,12 @@ class Blsct_Wallet(Abstract_Wallet):
                                memo=rec.memo, token_id=token_id,
                                staked=staked, delegation=delegation)
         return ref
+
+
+class PendingAggregate(NamedTuple):
+    ref: Optional[str]                       # reference computed from our half
+    covers: list                             # blsct_p2pmsg.Candidate
+    fallback: navio_blsct.BuiltTx            # our half alone, plain fee
 
 
 class BlsctSynchronizer(NetworkJobOnDefaultServer):

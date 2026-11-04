@@ -698,6 +698,28 @@ class SimpleConfig(Logger):
     NETWORK_SERVER = ConfigVar('server', default=None, type_=str)
     NETWORK_NOONION = ConfigVar('noonion', default=False, type_=bool)
     NETWORK_OFFLINE = ConfigVar('offline', default=False, type_=bool)
+    BLSCT_AGGREGATE_SENDS = ConfigVar(
+        'blsct_aggregate_sends', default=True, type_=bool,
+        short_desc=lambda: _('Aggregate sends with cover transactions'),
+        long_desc=lambda: _('Collect fee-0 cover transactions of other wallets over the '
+                            'Navio p2p network and merge them into your sends, so the '
+                            'transaction does not reveal which inputs and outputs belong '
+                            'together. Opens connections to Navio nodes (through the proxy, '
+                            'if one is set).'),
+    )
+    BLSCT_SERVE_CANDIDATES = ConfigVar(
+        'blsct_serve_candidates', default=True, type_=bool,
+        short_desc=lambda: _('Offer coins as cover for other wallets'),
+        long_desc=lambda: _('Answer other wallets\' requests for cover transactions with '
+                            'fee-0 self-spends of your coins (at most 30 coins per hour, '
+                            'only while the wallet is unlocked). The coin comes back to the '
+                            'same address; the other wallet pays the fee. The requester '
+                            'learns that one specific coin is yours.'),
+    )
+    # extra relays as "host:port" strings (mainnet seeds are always used)
+    BLSCT_P2P_PEERS = ConfigVar('blsct_p2p_peers', default=None)
+    # relays that worked before, kept between sessions
+    BLSCT_P2P_KNOWN_PEERS = ConfigVar('blsct_p2p_known_peers', default=None)
     NETWORK_SKIPMERKLECHECK = ConfigVar('skipmerklecheck', default=False, type_=bool)
     NETWORK_SERVERFINGERPRINT = ConfigVar('serverfingerprint', default=None, type_=str)
     NETWORK_MAX_INCOMING_MSG_SIZE = ConfigVar('network_max_incoming_msg_size', default=8_100_000, type_=int)  # in bytes
