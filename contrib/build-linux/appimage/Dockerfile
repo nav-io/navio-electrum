@@ -7,6 +7,9 @@ FROM debian:bullseye@sha256:cf48c31af360e1c0a0aedd33aae4d928b68c2cdf093f1612650e
 ENV LC_ALL=C.UTF-8 LANG=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
 
+# snapshot.debian.org intermittently returns 503/504: retry fetches instead of failing the build.
+RUN printf 'Acquire::Retries "10";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' > /etc/apt/apt.conf.d/80-retries
+
 # need ca-certificates before using snapshot packages over https.
 # Bootstrap from the same snapshot over plain http: the base image's default
 # sources include bullseye-security, whose Release file carries a Valid-Until

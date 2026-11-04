@@ -6,6 +6,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 ENV ANDROID_HOME="/opt/android"
 
+# snapshot.debian.org intermittently returns 503/504: retry fetches instead of failing the build.
+RUN printf 'Acquire::Retries "10";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' > /etc/apt/apt.conf.d/80-retries
+
 # need ca-certificates before using snapshot packages
 RUN apt update -qq > /dev/null && apt install -qq --yes --no-install-recommends \
     ca-certificates
@@ -103,11 +106,11 @@ RUN apt -y update -qq \
         libpcsclite1 \
     && apt -y autoremove \
     && cd /opt \
-    && curl --location --progress-bar "${JAVA_JRE_DL_URL}" --output "${JAVA_JRE_ARCHIVE}" \
+    && curl --location --progress-bar --fail --retry 10 --retry-all-errors --retry-delay 15 "${JAVA_JRE_DL_URL}" --output "${JAVA_JRE_ARCHIVE}" \
     && echo "${JAVA_JRE_HASH} ${JAVA_JRE_ARCHIVE}" | sha256sum -c - \
     && dpkg -i "${JAVA_JRE_ARCHIVE}" \
     && rm "${JAVA_JRE_ARCHIVE}" \
-    && curl --location --progress-bar "${JAVA_JDK_DL_URL}" --output "${JAVA_JDK_ARCHIVE}" \
+    && curl --location --progress-bar --fail --retry 10 --retry-all-errors --retry-delay 15 "${JAVA_JDK_DL_URL}" --output "${JAVA_JDK_ARCHIVE}" \
     && echo "${JAVA_JDK_HASH} ${JAVA_JDK_ARCHIVE}" | sha256sum -c - \
     && dpkg -i "${JAVA_JDK_ARCHIVE}" \
     && rm "${JAVA_JDK_ARCHIVE}"
