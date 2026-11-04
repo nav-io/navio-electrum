@@ -21,6 +21,7 @@
 #   src/init.cpp                  CANDIDATE_TX body = serialized transaction
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import random
@@ -781,10 +782,10 @@ class CandidatePuller(Logger):
             if not raw:
                 return   # nothing to serve (locked, no free coin, budget spent)
             env = await loop.run_in_executor(
-                None, lambda: build_envelope(reply_key, KIND_CANDIDATE_TX, raw,
-                                             version=conn.envelope_version,
-                                             bits=self.pow_bits,
-                                             should_stop=lambda: self._stopping))
+                None, functools.partial(build_envelope, reply_key, KIND_CANDIDATE_TX, raw,
+                                        version=conn.envelope_version,
+                                        bits=self.pow_bits,
+                                        should_stop=lambda: self._stopping))
             if env is None or conn not in self.conns:
                 return
             await conn.send_p2pmsg(env, stem=True)
