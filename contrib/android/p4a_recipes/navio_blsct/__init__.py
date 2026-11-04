@@ -20,10 +20,10 @@ class NavioBlsctRecipe(Recipe):
     into the target python's site-packages.
     """
 
-    # libblsct-bindings commit for the 0.0.40 release
-    version = '379944f35bc1b283d3d45c6c758b2241040f2ca4'
+    # libblsct-bindings commit for the 0.0.41 release
+    version = '58deb633d50e358b4cf4c535413ecdb6c089965a'
     url = 'https://github.com/nav-io/libblsct-bindings/archive/{version}.zip'
-    sha512sum = 'aa250e48f8cc07cf265b5c167bfda1452e8d5cc05d5f2b1df3519ce8db6432adb6d56d65eb21cae08b815557d79375476169eba2227c61b523d6d4b66f6c237e'
+    sha512sum = '163f88ba58d658a7bcbbda5af3dfd18d41d7e036fde8b432bf6d67139a4414b21a7548fa735f1289b7f09c6aea20edd955dfa4edc3000538d926e786d1309cc6'
 
     depends = ['python3', 'libblsct']
     need_stl_shared = True  # the wrapper is C++

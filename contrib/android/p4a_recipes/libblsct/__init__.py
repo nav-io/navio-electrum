@@ -19,10 +19,10 @@ class LibBlsctRecipe(Recipe):
     CMAKE_SYSTEM_PROCESSOR, so the NDK toolchain file is all it needs.
     """
 
-    # navio-core commit pinned by libblsct-bindings (ffi/navio-core.sha) for navio-blsct 0.0.40
-    version = '80c87037cf699cb333f173f5f0aee6714d314b19'
+    # navio-core commit pinned by libblsct-bindings (ffi/navio-core.sha) for navio-blsct 0.0.41
+    version = '7976768a903731b55dc875066d6dacee86f10ba6'
     url = 'https://github.com/nav-io/navio-core/archive/{version}.zip'
-    sha512sum = '69f81c206eaf3ec9b3829a191c92311b097b022a456f95af4cb41859cfa6f396bbe82a8af490e290c911243531133802e89e98597d0cee81b1513593cb2980d0'
+    sha512sum = '4208477758f9b9a18167a23b1cbe721d9eada6ca52fb08cf0b240e307305d02f595aad9bd449fc9a161d1b0ad089f4fdcaa1ed717147a5103e48f3452ffe4ba5'
 
     def built_archives(self, arch):
         build_dir = self.get_build_dir(arch.arch)
