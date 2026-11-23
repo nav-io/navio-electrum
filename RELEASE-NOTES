@@ -1,3 +1,24 @@
+# Release 4.9.18 - (November 23, 2026)
+ * Privacy score: every coin now shows how well mixed it is, in bits
+   (Coins tab, coin details, the mobile coin list, and listunspent). A
+   received coin starts at 0; each time it passes through a send
+   aggregated with other people's coins, it gains log2(other inputs + 1).
+   Change keeps the lowest score of the coins it spent.
+ * Coin selection prefers paying with coins of one score, spending the
+   least mixed ones first and keeping well-mixed coins together. A new
+   "Minimum privacy" setting (Send tab, mobile confirm screen, payto
+   --min_privacy) only spends coins scored at least that high. Coins
+   picked with coin control are always used, with a warning when their
+   scores differ by more than 1 bit.
+ * The send confirmation shows the privacy score your change will get.
+ * Coins synced by older versions have no score yet ("-"); run the
+   rescan command to fill them in.
+ * Desktop: the Send tab now honours coin control from the Coins tab.
+ * Mobile: the address list no longer shows every coin under each address.
+ * Staking: "Rewards earned" now counts all block rewards; it showed 0
+   when the staker paid rewards outside the staking sub-account.
+
+
 # Release 4.9.17 - (November 4, 2026)
  * Privacy: sends are now aggregated with other people's coins. The
    wallet collects cover transactions from the Navio p2p network and
