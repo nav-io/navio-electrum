@@ -444,6 +444,22 @@ class TestBlsctHistoryRewardSplit(ElectrumTestCase):
         self.assertIn('33' * 32, full)
         self.assertIn('22' * 32, full)
 
+    def test_staking_rewards_total(self):
+        """Rewards earned counts coinbase outputs wherever the staker paid
+        them (here the main account), spent ones included; staked
+        commitments and plain receives are not rewards."""
+        w = self._wallet()
+        w.blsct_outputs['a1' * 32] = self._out(w, 0, 8_0000_0000, 'Reward', 'b1' * 32)
+        w.blsct_outputs['a2' * 32] = self._out(w, 1, 8_0000_0000, 'Reward', 'b2' * 32,
+                                               spent_by='cc' * 32)
+        w.blsct_outputs['a3' * 32] = dict(self._out(w, 2, 1_0000_0000, '', 'b3' * 32),
+                                          coinbase=True)   # memo-less coinbase output
+        w.blsct_outputs['a4' * 32] = dict(self._out(w, 3, 2_0000_0000, 'Operator Fee', 'b4' * 32))
+        w.blsct_outputs['a5' * 32] = dict(self._out(w, 4, 100_0000_0000, '', 'b5' * 32),
+                                          staked=True)
+        w.blsct_outputs['a6' * 32] = self._out(w, 5, 3_0000_0000, 'hi', 'b6' * 32)
+        self.assertEqual(w.get_staking_rewards_sat(), 19_0000_0000)
+
     def test_plain_reward_unchanged(self):
         w = self._wallet()
         w.blsct_outputs['44' * 32] = self._out(w, 0, 8_0000_0000, 'Reward', 'bb' * 32)

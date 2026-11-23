@@ -818,22 +818,15 @@ class Blsct_Wallet(Abstract_Wallet):
             password, token_entry_key=key)
 
     def get_staking_rewards_sat(self) -> int:
-        """Total staking rewards ever received: outputs on the staking
-        sub-account that are not staked commitments, plus outputs to any
-        delegation reward address. Includes already-spent rewards."""
+        """Total staking rewards ever received: our coinbase outputs (the
+        block reward, and an operator-fee share if we stake for others),
+        spent ones included. The staker pays the reward to whatever
+        destination it chooses, so the receiving sub-account says nothing;
+        the coinbase marks it, as in the history ("Reward")."""
         with self._blsct_lock:
-            reward_addrs = set()
-            for d in self.blsct_outputs.values():
-                deleg = d.get('delegation') or {}
-                if deleg.get('reward_address'):
-                    reward_addrs.add(deleg['reward_address'])
-            total = 0
-            for d in self.blsct_outputs.values():
-                if d.get('token_id') or d.get('staked'):
-                    continue
-                if d.get('account') == STAKING_ACCOUNT or d.get('address') in reward_addrs:
-                    total += d['amount']
-        return total
+            return sum(d['amount'] for d in self.blsct_outputs.values()
+                       if not d.get('token_id') and not d.get('staked')
+                       and self._is_coinbase_output(d))
 
     def get_staked_balance_sat(self) -> int:
         return sum(u.d['amount'] for u in self.get_staked_outputs())
