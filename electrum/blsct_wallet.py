@@ -541,10 +541,14 @@ class Blsct_Wallet(Abstract_Wallet):
         return False
 
     def get_utxos(self, domain=None, **kwargs):
+        """Unspent NAV coins; with `domain` (addresses), only coins on those."""
+        domain = set(domain) if domain is not None else None
         utxos = []
         with self._blsct_lock:
             for ohash, d in self.blsct_outputs.items():
                 if d.get('spent_by') or d.get('token_id'):
+                    continue
+                if domain is not None and d.get('address') not in domain:
                     continue
                 utxos.append(BlsctUtxo(ohash, dict(d)))
         return utxos
