@@ -1173,6 +1173,27 @@ class Blsct_Wallet(Abstract_Wallet):
         with self._blsct_lock:
             return blsct_privacy.score_for_inputs(list(input_hashes), self.blsct_outputs)
 
+    def coins_privacy_mbits(self, output_hashes: Sequence[str]) -> List[Optional[int]]:
+        with self._blsct_lock:
+            return [(self.blsct_outputs.get(h) or {}).get(blsct_privacy.PRIVACY_KEY)
+                    for h in output_hashes]
+
+    def send_result_privacy_mbits(self, output_hashes: Sequence[str]) -> Optional[int]:
+        """Score the new outputs of a plain send spending these coins will
+        get: the lowest input score. Aggregation with covers adds to it."""
+        return blsct_privacy.result_mbits(self.coins_privacy_mbits(output_hashes))
+
+    def privacy_mix_warning(self, output_hashes: Sequence[str]) -> Optional[str]:
+        """Warning text when manually selected coins' privacy scores differ
+        by more than 1 bit (spending them together links them)."""
+        scores = self.coins_privacy_mbits(output_hashes)
+        if not blsct_privacy.spread_exceeds(scores):
+            return None
+        known = [m for m in scores if m is not None]
+        return _('The selected coins have privacy scores from {} to {} bits. '
+                 'Spending them together lowers the result to the smallest.').format(
+            blsct_privacy.format_bits(min(known)), blsct_privacy.format_bits(max(known)))
+
     def _classify_output(self, parsed: ParsedTxOut) -> Tuple[bool, Optional[dict]]:
         """Detect whether a (recovered, ours) output is a staked commitment
         and, if so, whether it carries a cold-staking delegation we can
@@ -1266,27 +1287,61 @@ class Blsct_Wallet(Abstract_Wallet):
             token_id_hex=d.get('token_id'),
         )
 
+    def send_candidate_coins(self, domain_coins: Optional[Sequence[str]] = None,
+                             min_privacy: Optional[float] = None) -> List[BlsctUtxo]:
+        """Coins a plain send may use: the manual selection if given (the
+        privacy floor does not apply to it), else every spendable coin at or
+        above `min_privacy` bits (unknown scores excluded)."""
+        coins = self.get_spendable_coins()
+        if domain_coins:
+            return [c for c in coins if c.output_hash in domain_coins]
+        floor = blsct_privacy.bits_to_mbits(min_privacy)
+        if floor is not None:
+            coins = [c for c in coins
+                     if c.privacy_mbits is not None and c.privacy_mbits >= floor]
+        return coins
+
     def _plan_send(self, recipients: Sequence[Tuple[str, int, str]],
                    domain_coins: Optional[Sequence[str]] = None,
-                   subtract_fee_from_amount: bool = False):
+                   subtract_fee_from_amount: bool = False,
+                   min_privacy: Optional[float] = None):
         """Coin selection for a plain send; keyring-independent.
-        -> (utxos, recipients, est_fee)"""
+        -> (utxos, recipients, est_fee)
+
+        Without `domain_coins` the selection prefers not to mix privacy
+        scores (blsct_privacy.select_by_privacy) and, with `min_privacy`
+        (bits), only uses coins scored at least that. A manual selection
+        (`domain_coins`) is used as given."""
         coins = self.get_spendable_coins()
         if domain_coins:
             coins = [c for c in coins if c.output_hash in domain_coins]
         coins.sort(key=lambda c: -c.d['amount'])
         total_out = sum(a for (_, a, _) in recipients)
-        selected = []
-        selected_amt = 0
         est_fee = lambda n: (n + len(recipients) + 2) * navio_blsct.DEFAULT_FEE_PER_COMPONENT
-        for c in coins:
-            if selected_amt >= total_out + (0 if subtract_fee_from_amount else est_fee(len(selected))):
-                break
-            selected.append(c)
-            selected_amt += c.d['amount']
-        if selected_amt < total_out + (0 if subtract_fee_from_amount else est_fee(len(selected))):
-            if not (subtract_fee_from_amount and selected_amt >= total_out):
-                raise NotEnoughFunds()
+
+        def greedy(candidates):
+            selected = []
+            selected_amt = 0
+            for c in candidates:
+                if selected_amt >= total_out + (0 if subtract_fee_from_amount else est_fee(len(selected))):
+                    break
+                selected.append(c)
+                selected_amt += c.d['amount']
+            if selected_amt < total_out + (0 if subtract_fee_from_amount else est_fee(len(selected))):
+                if not (subtract_fee_from_amount and selected_amt >= total_out):
+                    return None
+            return selected
+
+        if domain_coins:
+            selected = greedy(coins)
+        else:
+            selected = blsct_privacy.select_by_privacy(
+                coins, greedy, lambda c: c.privacy_mbits,
+                min_mbits=blsct_privacy.bits_to_mbits(min_privacy))
+        if selected is None:
+            if min_privacy is not None and not domain_coins and greedy(coins) is not None:
+                raise blsct_privacy.NotEnoughPrivateFunds(min_privacy)
+            raise NotEnoughFunds()
         utxos = [self._coin_to_spendable(c) for c in selected]
         recs = [r if isinstance(r, Recipient) else Recipient(r[0], r[1], r[2] or '')
                 for r in recipients]
@@ -1296,17 +1351,21 @@ class Blsct_Wallet(Abstract_Wallet):
                                  password=None, fixed_fee: Optional[int] = None,
                                  domain_coins: Optional[Sequence[str]] = None,
                                  subtract_fee_from_amount: bool = False,
-                                 aggregate: bool = True):
+                                 aggregate: bool = True,
+                                 min_privacy: Optional[float] = None):
         """recipients: [(nav1 address, amount_sats, memo)]
         Returns navio_blsct.BuiltTx.
 
         With `aggregate` (and no fixed fee) the send is merged with cover
         candidates when the background puller has any; the fee then also
         pays for the covers. The plain tx is kept and broadcast instead if
-        the network rejects the aggregate."""
+        the network rejects the aggregate.
+
+        `min_privacy` (bits): only spend coins with at least that privacy
+        score (see _plan_send); covers are not affected."""
         keyring = self._spending_keyring(password)
         utxos, recs, _fee = self._plan_send(
-            recipients, domain_coins, subtract_fee_from_amount)
+            recipients, domain_coins, subtract_fee_from_amount, min_privacy)
         plain = navio_blsct.build_signed_tx(
             keyring, utxos, recs,
             fixed_fee=fixed_fee,
@@ -1778,10 +1837,11 @@ class Blsct_Wallet(Abstract_Wallet):
             transcript_v2=self._wants_transcript_v2())
 
     def make_send_proposal(self, recipients, *, domain_coins=None,
-                           subtract_fee_from_amount: bool = False) -> dict:
+                           subtract_fee_from_amount: bool = False,
+                           min_privacy: Optional[float] = None) -> dict:
         from . import airgap
         utxos, recs, fee = self._plan_send(
-            recipients, domain_coins, subtract_fee_from_amount)
+            recipients, domain_coins, subtract_fee_from_amount, min_privacy)
         return airgap.make_proposal_payload(
             **self._airgap_env(), utxos=utxos, recipients=recs, fee=fee,
             subtract_fee_from_amount=subtract_fee_from_amount,

@@ -126,3 +126,98 @@ class TestSelectByPrivacy(unittest.TestCase):
     def test_single_bucket_is_plain_greedy(self):
         coins = [('a', 5, 1000), ('b', 5, 1999)]
         self.assertEqual(self.names(bp.select_by_privacy(coins, _greedy(7), _mbits)), ['a', 'b'])
+
+
+try:
+    from electrum import navio_blsct as nb
+    nb.get_blsct()
+    HAVE_BLSCT = True
+except Exception:
+    HAVE_BLSCT = False
+
+import os
+
+from electrum.simple_config import SimpleConfig
+
+from . import ElectrumTestCase
+
+
+@unittest.skipUnless(HAVE_BLSCT, "navio-blsct bindings not installed")
+class TestWalletPrivacySelection(ElectrumTestCase):
+    # output hash -> (amount in NAV, privacy mbits or None)
+    COINS = {'11' * 32: (5, 4200), '22' * 32: (3, 300), '33' * 32: (2, None),
+             '44' * 32: (1, 800), '55' * 32: (4, 4900)}
+
+    def setUp(self):
+        super().setUp()
+        self.config = SimpleConfig({'electrum_path': self.electrum_path})
+
+    def _wallet(self):
+        from electrum.blsct_wallet import restore_blsct_wallet_from_text
+        w = restore_blsct_wallet_from_text(
+            'ab' * 32, path=os.path.join(self.electrum_path, 'w'),
+            config=self.config)['wallet']
+        bk = w.keyring.spend_pub.serialize()
+        for i, (oh, (nav, mbits)) in enumerate(self.COINS.items()):
+            d = {'tx_hash': 'aa' * 32, 'height': 100 + i, 'amount': nav * 1_0000_0000,
+                 'gamma': format(12345 + i, '064x'), 'blinding_key': bk,
+                 'account': 0, 'addr_index': i,
+                 'address': w.get_receiving_addresses()[i], 'memo': '',
+                 'token_id': None, 'staked': False, 'delegation': None,
+                 'spent_by': None, 'spent_height': None}
+            if mbits is not None:
+                d['privacy_mbits'] = mbits
+            w.blsct_outputs[oh] = d
+        return w
+
+    def plan(self, w, nav, **kw):
+        utxos, _recs, _fee = w._plan_send([(w.keyring.address(0, 9), int(nav * 1_0000_0000), '')], **kw)
+        return sorted(u.output_hash[:2] for u in utxos)
+
+    def test_prefers_lowest_bucket_that_pays(self):
+        w = self._wallet()
+        self.assertEqual(self.plan(w, 1.5), ['33'])          # unknown bucket (2 NAV)
+        self.assertEqual(self.plan(w, 2.5), ['22'])          # bucket 0: 3 + 1 NAV
+        self.assertEqual(self.plan(w, 3.5), ['22', '44'])
+        self.assertEqual(self.plan(w, 8.5), ['11', '55'])    # bucket 4: 5 + 4 NAV
+        # no bucket pays 12 NAV alone: the old order across all coins
+        self.assertEqual(self.plan(w, 12), ['11', '22', '33', '55'])
+
+    def test_min_privacy_floor(self):
+        from electrum.blsct_privacy import NotEnoughPrivateFunds
+        w = self._wallet()
+        self.assertEqual(self.plan(w, 2.5, min_privacy=4), ['11'])
+        with self.assertRaises(NotEnoughPrivateFunds) as ctx:
+            self.plan(w, 10, min_privacy=4)
+        self.assertIn('privacy score >= 4 bits', str(ctx.exception))
+        # not enough funds at all: the plain error
+        with self.assertRaises(NotEnoughFunds) as ctx:
+            self.plan(w, 100, min_privacy=4)
+        self.assertNotIsInstance(ctx.exception, NotEnoughPrivateFunds)
+        self.assertEqual(
+            sorted(c.output_hash[:2] for c in w.send_candidate_coins(min_privacy=0.5)),
+            ['11', '44', '55'])
+
+    def test_manual_selection_overrides_and_warns(self):
+        w = self._wallet()
+        manual = ['22' * 32, '55' * 32]
+        # below the floor and across buckets: used as given
+        self.assertEqual(self.plan(w, 6, domain_coins=manual, min_privacy=10), ['22', '55'])
+        self.assertIn('0.30 to 4.90', w.privacy_mix_warning(manual))
+        self.assertIsNone(w.privacy_mix_warning(['11' * 32, '55' * 32]))
+        self.assertEqual(w.send_result_privacy_mbits(manual), 300)
+        self.assertIsNone(w.send_result_privacy_mbits(['11' * 32, '33' * 32]))
+
+    def test_own_send_change_and_listunspent(self):
+        w = self._wallet()
+        w.config.BLSCT_AGGREGATE_SENDS = False
+        built = w.create_blsct_transaction([(w.keyring.address(0, 9), 8_0000_0000, '')])
+        w.process_own_transaction(built.raw_hex, built.txid)
+        new = [u for u in w.get_utxos() if u.d['tx_hash'] == built.txid]
+        self.assertTrue(new)
+        # spent 11 (4.2 bits) and 55 (4.9 bits), no foreign inputs
+        self.assertTrue(all(u.privacy_mbits == 4200 for u in new))
+        self.assertEqual(new[0].to_json()['privacy_bits'], 4.2)
+        self.assertIsNone(w.blsct_outputs['33' * 32].get('privacy_mbits'))
+        self.assertIsNone(
+            [u for u in w.get_utxos() if u.output_hash == '33' * 32][0].to_json()['privacy_bits'])
