@@ -258,7 +258,7 @@ jobs:
   macos:
     name: "build: macOS"
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'macos' }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - name: Checkout
