@@ -354,6 +354,29 @@ class TestAggregatedSend(ElectrumTestCase):
         self.assertIn(ref, own_outputs)
         self.assertTrue(all(w.blsct_outputs[h]['spent_by'] for h in ('11' * 32, '22' * 32)))
 
+    async def test_aggregated_change_privacy_score(self):
+        # covers are foreign inputs: change gets log2(1 + 1) on top of the
+        # lowest score of our own coins
+        w = self._wallet()
+        w.blsct_outputs['11' * 32]['privacy_mbits'] = 2000
+        w.blsct_outputs['22' * 32]['privacy_mbits'] = 500
+        built = w.create_blsct_transaction([(w.keyring.address(0, 9), 7_0000_0000, '')])
+        self._fake_network(w, reject_first=False)
+        await w.broadcast_blsct_transaction(built.raw_hex)
+        change = [d for d in w.blsct_outputs.values() if d['height'] == 0]
+        self.assertTrue(change)
+        self.assertEqual({1500}, {d.get('privacy_mbits') for d in change})
+
+    async def test_fallback_plain_change_privacy_score(self):
+        w = self._wallet()
+        w.blsct_outputs['11' * 32]['privacy_mbits'] = 2000
+        w.blsct_outputs['22' * 32]['privacy_mbits'] = 500
+        built = w.create_blsct_transaction([(w.keyring.address(0, 9), 7_0000_0000, '')])
+        self._fake_network(w, reject_first=True)
+        await w.broadcast_blsct_transaction(built.raw_hex)
+        change = [d for d in w.blsct_outputs.values() if d['height'] == 0]
+        self.assertEqual({500}, {d.get('privacy_mbits') for d in change})
+
     async def test_rejected_aggregate_falls_back_to_plain(self):
         w = self._wallet()
         built = w.create_blsct_transaction([(w.keyring.address(0, 9), 7_0000_0000, '')])

@@ -31,6 +31,7 @@ from .logging import Logger
 from .wallet import (Abstract_Wallet, register_wallet_type, PiechartBalance,
                      register_constructor)
 from . import blsct_p2pmsg
+from . import blsct_privacy
 from . import navio_blsct
 from . import stake_delegation
 from .navio_blsct import (BlsctKeyRing, SpendableOutput, Recipient, parse_tx_hex,
@@ -236,6 +237,10 @@ class BlsctKeyStore(KeyStore):
         })
 
 
+# _store_output: leave the stored privacy score as it is
+_SCORE_NOT_GIVEN = object()
+
+
 class BlsctUtxo:
     """Minimal coin object so generic commands (listunspent) can render
     BLSCT outputs."""
@@ -259,6 +264,15 @@ class BlsctUtxo:
     def short_id(self):
         return self.output_hash[:10] + '…'
 
+    @property
+    def privacy_mbits(self) -> Optional[int]:
+        """Privacy score in milli-bits, None if unknown (blsct_privacy)."""
+        return self.d.get(blsct_privacy.PRIVACY_KEY)
+
+    @property
+    def privacy_bits(self) -> Optional[float]:
+        return blsct_privacy.mbits_to_bits(self.privacy_mbits)
+
     def to_json(self):
         return {
             'output_hash': self.output_hash,
@@ -273,6 +287,9 @@ class BlsctUtxo:
             'staked': bool(self.d.get('staked')),
             'coinbase': bool(self.d.get('coinbase')),
             'delegation': self.d.get('delegation'),
+            # bits, None when unknown (synced before the score existed)
+            'privacy_bits': (None if self.privacy_mbits is None
+                             else round(self.privacy_mbits / 1000, 3)),
         }
 
 
@@ -1078,6 +1095,19 @@ class Blsct_Wallet(Abstract_Wallet):
     def is_up_to_date(self) -> bool:
         return self._up_to_date
 
+    def request_blsct_rescan(self):
+        """Scan the chain again from the wallet's creation height. Coins
+        already stored are kept and not downloaded again; their privacy
+        scores (and spent state) are recomputed from each block's inputs,
+        which fills in the scores of coins synced before the score existed.
+        Picked up by the synchronizer at its next pass."""
+        self.blsct_sync['rescan_requested'] = True
+        self.set_blsct_up_to_date(False)
+
+    def num_unscored_coins(self) -> int:
+        """Unspent coins whose privacy score is unknown."""
+        return sum(1 for u in self.get_utxos() if u.privacy_mbits is None)
+
     def set_blsct_up_to_date(self, b: bool):
         self._up_to_date = b
         if b:
@@ -1092,7 +1122,11 @@ class Blsct_Wallet(Abstract_Wallet):
                       account: int, addr_index: int, memo: str,
                       token_id: Optional[str], staked: bool = False,
                       delegation: Optional[dict] = None,
-                      coinbase: bool = False):
+                      coinbase: bool = False,
+                      privacy_mbits=_SCORE_NOT_GIVEN):
+        """`privacy_mbits`: the output's privacy score computed from the
+        containing tx (None = unknown). Given for every (re)sync of the tx,
+        so a later view (the block's, after mempool) replaces the score."""
         with self._blsct_lock:
             existing = self.blsct_outputs.get(output_hash)
             if existing:
@@ -1100,6 +1134,7 @@ class Blsct_Wallet(Abstract_Wallet):
                 existing['height'] = height
                 if coinbase:
                     existing['coinbase'] = True
+                self._set_privacy_score(existing, privacy_mbits)
                 return
             self.blsct_outputs[output_hash] = {
                 'tx_hash': tx_hash,
@@ -1121,6 +1156,22 @@ class Blsct_Wallet(Abstract_Wallet):
                 'spent_by': None,
                 'spent_height': None,
             }
+            self._set_privacy_score(self.blsct_outputs[output_hash], privacy_mbits)
+
+    @staticmethod
+    def _set_privacy_score(d: dict, mbits):
+        if mbits is _SCORE_NOT_GIVEN:
+            return
+        if mbits is None:
+            d.pop(blsct_privacy.PRIVACY_KEY, None)
+        else:
+            d[blsct_privacy.PRIVACY_KEY] = int(mbits)
+
+    def privacy_score_for_inputs(self, input_hashes: Sequence[str]) -> Optional[int]:
+        """Score (milli-bits) of an output of a tx with these inputs (output
+        hashes, ours and foreign)."""
+        with self._blsct_lock:
+            return blsct_privacy.score_for_inputs(list(input_hashes), self.blsct_outputs)
 
     def _classify_output(self, parsed: ParsedTxOut) -> Tuple[bool, Optional[dict]]:
         """Detect whether a (recovered, ours) output is a staked commitment
@@ -1868,6 +1919,9 @@ class Blsct_Wallet(Abstract_Wallet):
         parsed = parse_tx_hex(raw_hex)
         if ref is None:
             ref = self.blsct_tx_reference(parsed)
+        # every input of the broadcast tx, covers' included; the block view
+        # (BlsctSynchronizer) replaces this if a staker merges the tx further
+        score = self.privacy_score_for_inputs([tin.prevout_hash for tin in parsed.inputs])
         for tin in parsed.inputs:
             self._mark_spent(tin.prevout_hash, txid, 0, ref=ref)
         for out in parsed.outputs:
@@ -1888,7 +1942,8 @@ class Blsct_Wallet(Abstract_Wallet):
                                blinding_key_hex=out.blinding_key.hex(),
                                account=pair[0], addr_index=pair[1],
                                memo=rec.memo, token_id=token_id,
-                               staked=staked, delegation=delegation)
+                               staked=staked, delegation=delegation,
+                               privacy_mbits=score)
         return ref
 
 
@@ -1988,6 +2043,11 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
         tip = min(server_height, local_height) if server_height else local_height
         if tip <= 0:
             return
+        if wallet.blsct_sync.pop('rescan_requested', None):
+            start = wallet.blsct_sync.get('creation_height', 0)
+            self.logger.info(f'rescan requested: rewinding to {start}')
+            self._set_last_synced(start - 1)
+            wallet.blsct_sync['hashes'] = {}
         await self._check_reorg()
         progressed = False
 
@@ -2054,6 +2114,16 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
             vouts = keys.get('vout') or keys.get('outputs') or []
             vins = keys.get('vin') or keys.get('inputs') or []
             yield tx_hash, vouts, vins
+
+    @staticmethod
+    def _vin_prevout(v) -> Optional[str]:
+        """Output hash a vin entry spends. electrumx writes
+        {'prevoutHash': <output hash>} for every non-coinbase input, ours
+        and foreign alike."""
+        if not isinstance(v, dict):
+            return None
+        return (v.get('prevoutHash') or v.get('prevout_hash')
+                or v.get('outputHash') or v.get('output_hash'))
 
     @staticmethod
     def _output_keys(v: dict):
@@ -2148,6 +2218,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
 
         for tx_hash, vouts, vins in self._tx_entries(block_txs):
             is_coinbase = not vins
+            prevouts = [p for p in (self._vin_prevout(v) for v in vins) if p]
+            score = _SCORE_NOT_GIVEN   # computed once, for the first output of ours
 
             for v in vouts:
                 k = self._output_keys(v)
@@ -2160,18 +2232,17 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                     pair = await run_in_thread(keyring.match_output, bk, sk, vt)
                 if not pair:
                     continue
+                if score is _SCORE_NOT_GIVEN:
+                    score = wallet.privacy_score_for_inputs(prevouts)
                 await self._fetch_and_store_output(
                     tx_hash, height, ohash, bk, pair, coinbase=is_coinbase,
-                    out_hex=(prefetched or {}).get(ohash))
+                    out_hex=(prefetched or {}).get(ohash),
+                    privacy_mbits=score)
 
             vout_hashes = [v.get('outputHash') or v.get('output_hash')
                            for v in vouts]
             vout_hashes = [h for h in vout_hashes if h]
-            for v in vins:
-                prevout = (v.get('prevoutHash') or v.get('prevout_hash')
-                           or v.get('outputHash') or v.get('output_hash'))
-                if not prevout:
-                    continue
+            for prevout in prevouts:
                 if prevout in wallet.blsct_outputs:
                     wallet._mark_spent(prevout, tx_hash, height,
                                        ref=vout_hashes[0] if vout_hashes else None)
@@ -2180,7 +2251,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                                       output_hash: str, blinding_key_hex: str,
                                       pair: Tuple[int, int], *,
                                       coinbase: bool = False,
-                                      out_hex: Optional[str] = None):
+                                      out_hex: Optional[str] = None,
+                                      privacy_mbits=_SCORE_NOT_GIVEN):
         wallet = self.wallet
         keyring = wallet.keyring
         existing = wallet.blsct_outputs.get(output_hash)
@@ -2190,6 +2262,8 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                 existing['height'] = height
                 if coinbase:
                     existing['coinbase'] = True
+                # the block view wins over the mempool one
+                wallet._set_privacy_score(existing, privacy_mbits)
             return
         if out_hex is None:
             try:
@@ -2221,7 +2295,7 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                              account=pair[0], addr_index=pair[1],
                              memo=rec.memo, token_id=token_id,
                              staked=staked, delegation=delegation,
-                             coinbase=coinbase)
+                             coinbase=coinbase, privacy_mbits=privacy_mbits)
         self.logger.info(f'found output {output_hash[:16]} amount={rec.amount} '
                          f'height={height} acct={pair} staked={staked}')
         local_height = wallet.network.get_local_height() if wallet.network else 0
