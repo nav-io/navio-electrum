@@ -304,6 +304,7 @@ class Blsct_Wallet(Abstract_Wallet):
         # {output_hash: {...}} see _store_output for the schema
         self.blsct_outputs = db.get_dict('blsct_outputs')
         self.blsct_sync = db.get_dict('blsct_sync')
+        self._upgrade_privacy_rule()
         self.blsct_synchronizer = None  # type: Optional[BlsctSynchronizer]
         self.cover_puller = None  # type: Optional[blsct_p2pmsg.CandidatePuller]
         # aggregate txid -> PendingAggregate, for the broadcast fallback
@@ -316,6 +317,20 @@ class Blsct_Wallet(Abstract_Wallet):
         Abstract_Wallet.__init__(self, db, config=config)
         self._rebuild_address_index()
         self._ensure_addresses()
+
+    # Version of the privacy-score rule the stored scores follow. 4.9.18
+    # scored a payment to us inside an aggregate as 0; from rule 2 every
+    # output of ours in a tx spending our coins takes the tx score.
+    PRIVACY_RULE = 2
+
+    def _upgrade_privacy_rule(self):
+        """Scores stored under an older rule cannot be fixed in place (the
+        tx inputs are not kept), so rescan once to recompute them."""
+        if self.blsct_sync.get('privacy_rule') == self.PRIVACY_RULE:
+            return
+        if any(blsct_privacy.PRIVACY_KEY in d for d in self.blsct_outputs.values()):
+            self.blsct_sync['rescan_requested'] = True
+        self.blsct_sync['privacy_rule'] = self.PRIVACY_RULE
 
     # ------------------------------------------------------------------ setup
 
@@ -1174,8 +1189,8 @@ class Blsct_Wallet(Abstract_Wallet):
 
     def privacy_score_for_inputs(self, input_hashes: Sequence[str],
                                  created_hashes: Sequence[str] = ()) -> Optional[int]:
-        """Score (milli-bits) of a tx with these inputs: what its change, or
-        a served cover coming back, gets."""
+        """Score (milli-bits) of a tx with these inputs: what every output of
+        ours in it gets."""
         return self.privacy_context(input_hashes, created_hashes).tx_mbits
 
     def _score_stored_output(self, ctx: Optional[blsct_privacy.TxPrivacy], d: dict):
@@ -1183,9 +1198,7 @@ class Blsct_Wallet(Abstract_Wallet):
         or _SCORE_NOT_GIVEN without a context."""
         if ctx is None:
             return _SCORE_NOT_GIVEN
-        return ctx.score_output(
-            is_change=d.get('account') == CHANGE_ACCOUNT, memo=d.get('memo') or '',
-            address=d.get('address'), amount=d.get('amount'), token_id=d.get('token_id'))
+        return ctx.score_output()
 
     def coins_privacy_mbits(self, output_hashes: Sequence[str]) -> List[Optional[int]]:
         with self._blsct_lock:
@@ -2011,10 +2024,7 @@ class Blsct_Wallet(Abstract_Wallet):
                 continue
             token_id = out.token_id.hex() if (out.token_id and out.token_id != bytes(32)) else None
             staked, delegation = self._classify_output(out)
-            score = ctx.score_output(
-                is_change=pair[0] == CHANGE_ACCOUNT, memo=rec.memo or '',
-                address=self.keyring.address(pair[0], pair[1]), amount=rec.amount,
-                token_id=token_id)
+            score = ctx.score_output()
             self._store_output(out.output_hash,
                                tx_hash=txid, height=0, amount=rec.amount,
                                gamma_hex=rec.gamma_hex,

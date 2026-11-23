@@ -1,3 +1,11 @@
+# Release 4.9.19 - (unreleased)
+ * Privacy score: a payment you receive inside an aggregate that also
+   spends one of your coins now gets that transaction's score, like your
+   change and returned covers. 4.9.18 scored it 0. This matches Navio
+   Core's wallet. Wallets that stored 4.9.18 scores rescan once on
+   startup to recompute them.
+
+
 # Release 4.9.18 - (November 23, 2026)
  * Privacy score: every coin now shows how well mixed it is, in bits
    (Coins tab, coin details, the mobile coin list, and listunspent). A

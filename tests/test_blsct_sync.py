@@ -183,7 +183,7 @@ class TestBlsctSyncPrivacy(ElectrumTestCase):
             'r1': {'address': 'A1', 'amount': 50},
             # our served candidate (r1) coming back: same address and amount
             'c1': {'address': 'A1', 'amount': 50, 'memo': 'candidate'},
-            # paid to us inside the same aggregate by a foreign input's owner
+            # paid to us inside the same aggregate: it takes the tx score too
             'p1': {'address': 'A2', 'amount': 9, 'memo': 'hi'},
             'ch': {'account': CHANGE},
         })
@@ -204,7 +204,7 @@ class TestBlsctSyncPrivacy(ElectrumTestCase):
         self.assertEqual(self.score(s, 'r1'), 0)
         self.assertEqual(self.score(s, 'r2'), 0)
         self.assertEqual(self.score(s, 'c1'), 2000)
-        self.assertEqual(self.score(s, 'p1'), 0)
+        self.assertEqual(self.score(s, 'p1'), 2000)
         self.assertEqual(self.score(s, 'ch'), 0)
         self.assertEqual(s.wallet.blsct_outputs['r1']['spent_by'], 'agg')
 
@@ -268,3 +268,28 @@ class TestBlsctSyncPrivacy(ElectrumTestCase):
         self.assertEqual(seen, [49])
         self.assertEqual(s.wallet.blsct_sync['hashes'], {})
         self.assertNotIn('rescan_requested', s.wallet.blsct_sync)
+
+
+class TestPrivacyRuleUpgrade(ElectrumTestCase):
+
+    def _wallet(self, outputs, sync=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(blsct_outputs=outputs, blsct_sync=dict(sync or {}),
+                               PRIVACY_RULE=Blsct_Wallet.PRIVACY_RULE)
+
+    def test_scores_from_an_older_rule_request_one_rescan(self):
+        w = self._wallet({'a': {'privacy_mbits': 0}, 'b': {}})
+        Blsct_Wallet._upgrade_privacy_rule(w)
+        self.assertTrue(w.blsct_sync.get('rescan_requested'))
+        self.assertEqual(w.blsct_sync['privacy_rule'], Blsct_Wallet.PRIVACY_RULE)
+        # only once
+        w.blsct_sync.pop('rescan_requested')
+        Blsct_Wallet._upgrade_privacy_rule(w)
+        self.assertNotIn('rescan_requested', w.blsct_sync)
+
+    def test_no_stored_scores_no_rescan(self):
+        # new wallets, and wallets from before scores existed
+        w = self._wallet({'b': {}})
+        Blsct_Wallet._upgrade_privacy_rule(w)
+        self.assertNotIn('rescan_requested', w.blsct_sync)
+        self.assertEqual(w.blsct_sync['privacy_rule'], Blsct_Wallet.PRIVACY_RULE)

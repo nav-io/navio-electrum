@@ -53,15 +53,6 @@ class TestPrivacyScore(unittest.TestCase):
             s = bp.privacy_mbits(3, [s])
         self.assertEqual(s, 6000)
 
-    def test_output_made_by_us_rule(self):
-        # no foreign inputs: every output of ours takes the tx score
-        self.assertEqual(bp.output_mbits(2500, 0, False), 2500)
-        # foreign inputs: only change / a cover return keeps it
-        self.assertEqual(bp.output_mbits(2500, 3, True), 2500)
-        self.assertEqual(bp.output_mbits(2500, 3, False), 0)
-        self.assertEqual(bp.output_mbits(None, 3, False), 0)
-        self.assertIsNone(bp.output_mbits(None, 3, True))
-
     def test_negative_foreign_rejected(self):
         with self.assertRaises(ValueError):
             bp.privacy_mbits(-1, [0])
@@ -79,21 +70,17 @@ class TestPrivacyScore(unittest.TestCase):
         self.assertEqual(tx(['a', 'x', 'm1'], created=['m1', 'm2']), 3000)
 
     def test_tx_privacy_outputs(self):
-        outs = {'mine': {'privacy_mbits': 2000, 'address': 'A', 'amount': 5},
-                'tok': {'privacy_mbits': 2000, 'address': 'A', 'amount': 7, 'token_id': 'ff'}}
+        # every output of ours in a tx spending our coins takes the tx score:
+        # change, a cover coming back and a payment to us inside the aggregate
+        outs = {'mine': {'privacy_mbits': 2000}, 'tok': {'privacy_mbits': 2000, 'token_id': 'ff'}}
         ctx = bp.TxPrivacy(['mine', 'tok', 'x', 'y', 'z'], outs)
         self.assertEqual(ctx.tx_mbits, 4000)
-        kw = dict(is_change=False, memo='candidate', address='A', amount=5, token_id=None)
-        # paid to us by a foreign input's owner: 0
-        self.assertEqual(ctx.score_output(**dict(kw, memo='hi')), 0)
-        # change keeps the tx score
-        self.assertEqual(ctx.score_output(**dict(kw, is_change=True, memo='')), 4000)
-        # token outputs and wrong amounts are no cover return
-        self.assertEqual(ctx.score_output(**dict(kw, amount=7)), 0)
-        self.assertEqual(ctx.score_output(**dict(kw, token_id='ff')), 0)
-        # the cover return of our spent NAV coin matches once
-        self.assertEqual(ctx.score_output(**kw), 4000)
-        self.assertEqual(ctx.score_output(**kw), 0)
+        self.assertEqual(ctx.score_output(), 4000)
+        self.assertEqual(ctx.score_output(), 4000)
+        # a tx spending none of our coins: every output of ours scores 0
+        self.assertEqual(bp.TxPrivacy(['x', 'y'], outs).score_output(), 0)
+        # unknown own input: unknown
+        self.assertIsNone(bp.TxPrivacy(['c', 'x'], {'c': {}}).score_output())
 
     def test_display_and_helpers(self):
         self.assertEqual(bp.format_bits(None), '–')

@@ -9,19 +9,18 @@
 # an aggregate (ours with covers, or someone else's that spent a cover
 # candidate we served) adds log2(foreign + 1) on top of that.
 #
-# Only an output the wallet made itself takes the tx's score: change (the
-# change sub-account) or a served cover coming back. Any other output of
-# ours in a tx with foreign inputs may have been paid to us by one of their
-# owners, who knows it: it scores 0 like any receive.
+# Every output of ours in a tx that spends one of our coins takes the tx's
+# score: change, a served cover coming back, and a payment to us inside
+# that aggregate alike.
 #
 # Scores are stored as integer milli-bits on the coin dict
 # ('privacy_mbits'); an absent key means unknown (e.g. coins synced before
 # the score existed, or a coin whose own input score is unknown). This
 # mirrors navio-core's src/wallet/privacy_score.{h,cpp} (floor of the log
-# term, saturation, same-tx inputs, the made-by-us rule): keep them in step.
+# term, saturation, same-tx inputs, every own output taking the tx score): keep them in step.
 
 import math
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
+from typing import Callable, Dict, List, Optional, Sequence, TypeVar
 
 from .i18n import _
 from .util import NotEnoughFunds
@@ -32,8 +31,6 @@ MBITS_PER_BIT = 1000
 MBITS_MAX = 2 ** 32 - 2   # core: uint32, max value encodes "unknown"
 UNKNOWN_BUCKET = -1
 UNKNOWN_TEXT = '\u2013'   # en dash: shown for an unknown score
-# memo of a served cover candidate's output (core COVER_CANDIDATE_MEMO)
-COVER_CANDIDATE_MEMO = 'candidate'
 
 
 def log2_mbits(n: int) -> int:
@@ -64,14 +61,6 @@ def privacy_mbits(foreign_inputs: int,
     return min(lowest + log2_mbits(foreign_inputs + 1), MBITS_MAX)
 
 
-def output_mbits(tx_mbits: Optional[int], foreign_inputs: int, made_by_us: bool) -> Optional[int]:
-    """Score of one of our outputs of a tx scored `tx_mbits` (core
-    OutputPrivacyMilliBits)."""
-    if foreign_inputs == 0 or made_by_us:
-        return tx_mbits
-    return 0
-
-
 class TxPrivacy:
     """Privacy context of one transaction, for scoring its outputs of ours.
 
@@ -86,8 +75,6 @@ class TxPrivacy:
         created = set(created_hashes)
         own = []
         self.foreign = 0
-        # our spent NAV coins as (address, amount): a cover return matches one
-        self._own_spent = []  # type: List[Tuple[str, int]]
         for h in input_hashes:
             if h in created:
                 continue
@@ -96,28 +83,11 @@ class TxPrivacy:
                 self.foreign += 1
                 continue
             own.append(d.get(PRIVACY_KEY))
-            if not d.get('token_id'):
-                self._own_spent.append((d.get('address'), d.get('amount')))
         self.tx_mbits = privacy_mbits(self.foreign, own)
 
-    def _take_cover_return(self, *, memo, address, amount, token_id) -> bool:
-        """Is this output a served cover coming back: the candidate memo,
-        NAV, the address and amount of a coin of ours the tx spends (each
-        spent coin matches once; core OutputIsCoverReturn)."""
-        if not self._own_spent or memo != COVER_CANDIDATE_MEMO or token_id:
-            return False
-        try:
-            self._own_spent.remove((address, amount))
-        except ValueError:
-            return False
-        return True
-
-    def score_output(self, *, is_change: bool, memo: str, address: str,
-                     amount: int, token_id: Optional[str]) -> Optional[int]:
-        """Score of one of our outputs; call once per output, in vout order."""
-        made_by_us = is_change or self._take_cover_return(
-            memo=memo, address=address, amount=amount, token_id=token_id)
-        return output_mbits(self.tx_mbits, self.foreign, made_by_us)
+    def score_output(self) -> Optional[int]:
+        """Score of any of our outputs of this tx: the tx's score."""
+        return self.tx_mbits
 
 
 def mbits_to_bits(mbits: Optional[int]) -> Optional[float]:
