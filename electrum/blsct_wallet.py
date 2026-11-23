@@ -1171,11 +1171,28 @@ class Blsct_Wallet(Abstract_Wallet):
         else:
             d[blsct_privacy.PRIVACY_KEY] = int(mbits)
 
-    def privacy_score_for_inputs(self, input_hashes: Sequence[str]) -> Optional[int]:
-        """Score (milli-bits) of an output of a tx with these inputs (output
-        hashes, ours and foreign)."""
+    def privacy_context(self, input_hashes: Sequence[str],
+                        created_hashes: Sequence[str] = ()) -> blsct_privacy.TxPrivacy:
+        """Privacy context of a tx with these inputs (spent output hashes,
+        ours and foreign) and outputs, to score its outputs of ours."""
         with self._blsct_lock:
-            return blsct_privacy.score_for_inputs(list(input_hashes), self.blsct_outputs)
+            return blsct_privacy.TxPrivacy(list(input_hashes), self.blsct_outputs,
+                                           created_hashes)
+
+    def privacy_score_for_inputs(self, input_hashes: Sequence[str],
+                                 created_hashes: Sequence[str] = ()) -> Optional[int]:
+        """Score (milli-bits) of a tx with these inputs: what its change, or
+        a served cover coming back, gets."""
+        return self.privacy_context(input_hashes, created_hashes).tx_mbits
+
+    def _score_stored_output(self, ctx: Optional[blsct_privacy.TxPrivacy], d: dict):
+        """-> privacy score of stored output `d` in the tx `ctx` describes,
+        or _SCORE_NOT_GIVEN without a context."""
+        if ctx is None:
+            return _SCORE_NOT_GIVEN
+        return ctx.score_output(
+            is_change=d.get('account') == CHANGE_ACCOUNT, memo=d.get('memo') or '',
+            address=d.get('address'), amount=d.get('amount'), token_id=d.get('token_id'))
 
     def coins_privacy_mbits(self, output_hashes: Sequence[str]) -> List[Optional[int]]:
         with self._blsct_lock:
@@ -1985,7 +2002,8 @@ class Blsct_Wallet(Abstract_Wallet):
             ref = self.blsct_tx_reference(parsed)
         # every input of the broadcast tx, covers' included; the block view
         # (BlsctSynchronizer) replaces this if a staker merges the tx further
-        score = self.privacy_score_for_inputs([tin.prevout_hash for tin in parsed.inputs])
+        ctx = self.privacy_context([tin.prevout_hash for tin in parsed.inputs],
+                                   [o.output_hash for o in parsed.outputs])
         for tin in parsed.inputs:
             self._mark_spent(tin.prevout_hash, txid, 0, ref=ref)
         for out in parsed.outputs:
@@ -2000,6 +2018,10 @@ class Blsct_Wallet(Abstract_Wallet):
                 continue
             token_id = out.token_id.hex() if (out.token_id and out.token_id != bytes(32)) else None
             staked, delegation = self._classify_output(out)
+            score = ctx.score_output(
+                is_change=pair[0] == CHANGE_ACCOUNT, memo=rec.memo or '',
+                address=self.keyring.address(pair[0], pair[1]), amount=rec.amount,
+                token_id=token_id)
             self._store_output(out.output_hash,
                                tx_hash=txid, height=0, amount=rec.amount,
                                gamma_hex=rec.gamma_hex,
@@ -2180,6 +2202,10 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
             yield tx_hash, vouts, vins
 
     @staticmethod
+    def _vout_hash(v) -> Optional[str]:
+        return (v.get('outputHash') or v.get('output_hash')) if isinstance(v, dict) else None
+
+    @staticmethod
     def _vin_prevout(v) -> Optional[str]:
         """Output hash a vin entry spends. electrumx writes
         {'prevoutHash': <output hash>} for every non-coinbase input, ours
@@ -2283,7 +2309,7 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
         for tx_hash, vouts, vins in self._tx_entries(block_txs):
             is_coinbase = not vins
             prevouts = [p for p in (self._vin_prevout(v) for v in vins) if p]
-            score = _SCORE_NOT_GIVEN   # computed once, for the first output of ours
+            ctx = None   # built once, for the first output of ours
 
             for v in vouts:
                 k = self._output_keys(v)
@@ -2296,16 +2322,15 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                     pair = await run_in_thread(keyring.match_output, bk, sk, vt)
                 if not pair:
                     continue
-                if score is _SCORE_NOT_GIVEN:
-                    score = wallet.privacy_score_for_inputs(prevouts)
+                if ctx is None:
+                    ctx = wallet.privacy_context(
+                        prevouts, [h for h in (self._vout_hash(x) for x in vouts) if h])
                 await self._fetch_and_store_output(
                     tx_hash, height, ohash, bk, pair, coinbase=is_coinbase,
                     out_hex=(prefetched or {}).get(ohash),
-                    privacy_mbits=score)
+                    privacy=ctx)
 
-            vout_hashes = [v.get('outputHash') or v.get('output_hash')
-                           for v in vouts]
-            vout_hashes = [h for h in vout_hashes if h]
+            vout_hashes = [h for h in (self._vout_hash(v) for v in vouts) if h]
             for prevout in prevouts:
                 if prevout in wallet.blsct_outputs:
                     wallet._mark_spent(prevout, tx_hash, height,
@@ -2316,7 +2341,9 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                                       pair: Tuple[int, int], *,
                                       coinbase: bool = False,
                                       out_hex: Optional[str] = None,
-                                      privacy_mbits=_SCORE_NOT_GIVEN):
+                                      privacy: Optional[blsct_privacy.TxPrivacy] = None):
+        """`privacy`: the containing tx's privacy context; the output's score
+        is (re)computed from it, the block view replacing the mempool one."""
         wallet = self.wallet
         keyring = wallet.keyring
         existing = wallet.blsct_outputs.get(output_hash)
@@ -2326,8 +2353,7 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
                 existing['height'] = height
                 if coinbase:
                     existing['coinbase'] = True
-                # the block view wins over the mempool one
-                wallet._set_privacy_score(existing, privacy_mbits)
+                wallet._set_privacy_score(existing, wallet._score_stored_output(privacy, existing))
             return
         if out_hex is None:
             try:
@@ -2352,6 +2378,9 @@ class BlsctSynchronizer(NetworkJobOnDefaultServer):
             token_id = (parsed.token_id.hex()
                         + parsed.token_nft_id.to_bytes(8, 'little', signed=True).hex())
         staked, delegation = wallet._classify_output(parsed)
+        privacy_mbits = wallet._score_stored_output(privacy, {
+            'account': pair[0], 'memo': rec.memo, 'amount': rec.amount, 'token_id': token_id,
+            'address': keyring.address(pair[0], pair[1])})
         wallet._store_output(output_hash,
                              tx_hash=tx_hash, height=height, amount=rec.amount,
                              gamma_hex=rec.gamma_hex,

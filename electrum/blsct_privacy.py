@@ -1,56 +1,123 @@
 # Per-coin privacy score for BLSCT outputs.
 #
-# privacy_bits(out) = log2(foreign_inputs + 1) + min(privacy_bits(own inputs))
+# privacy_bits(tx) = log2(foreign_inputs + 1) + min(privacy_bits(own inputs))
 #
-# where foreign_inputs counts the inputs of the containing transaction that
-# are not this wallet's coins. A transaction that spends none of our coins
-# (a plain receive, a staking reward, a coinbase) gives score 0: the sender
-# knows the coin. Our own send's change keeps the lowest score of the coins
-# it spent; an aggregate (ours with covers, or someone else's that spent a
-# cover candidate we served) adds log2(foreign + 1) on top of that.
+# where foreign_inputs counts the inputs of the transaction that are not
+# this wallet's coins. A transaction that spends none of our coins (a plain
+# receive, a staking reward, a coinbase) scores 0: the sender knows the
+# coin. Our own send's change keeps the lowest score of the coins it spent;
+# an aggregate (ours with covers, or someone else's that spent a cover
+# candidate we served) adds log2(foreign + 1) on top of that.
+#
+# Only an output the wallet made itself takes the tx's score: change (the
+# change sub-account) or a served cover coming back. Any other output of
+# ours in a tx with foreign inputs may have been paid to us by one of their
+# owners, who knows it: it scores 0 like any receive.
 #
 # Scores are stored as integer milli-bits on the coin dict
 # ('privacy_mbits'); an absent key means unknown (e.g. coins synced before
-# the score existed, or a coin whose own input score is unknown). The same
-# formula is implemented by navio-core's wallet: keep them in step.
+# the score existed, or a coin whose own input score is unknown). This
+# mirrors navio-core's src/wallet/privacy_score.{h,cpp} (floor of the log
+# term, saturation, same-tx inputs, the made-by-us rule): keep them in step.
 
 import math
-from typing import Callable, Dict, List, Optional, Sequence, TypeVar
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
 
 from .i18n import _
 from .util import NotEnoughFunds
 
 
 PRIVACY_KEY = 'privacy_mbits'
+MBITS_PER_BIT = 1000
+MBITS_MAX = 2 ** 32 - 2   # core: uint32, max value encodes "unknown"
 UNKNOWN_BUCKET = -1
 UNKNOWN_TEXT = '\u2013'   # en dash: shown for an unknown score
+# memo of a served cover candidate's output (core COVER_CANDIDATE_MEMO)
+COVER_CANDIDATE_MEMO = 'candidate'
+
+
+def log2_mbits(n: int) -> int:
+    """floor(1000 * log2(n)) for n >= 1, exact for powers of two
+    (core Log2MilliBits)."""
+    if n < 1:
+        raise ValueError('n must be >= 1')
+    whole = n.bit_length() - 1
+    lower = whole * MBITS_PER_BIT
+    if n & (n - 1) == 0:
+        return lower
+    milli = math.floor(math.log2(n) * MBITS_PER_BIT)
+    return min(max(milli, lower), lower + MBITS_PER_BIT - 1)
 
 
 def privacy_mbits(foreign_inputs: int,
                   own_input_mbits: Sequence[Optional[int]]) -> Optional[int]:
-    """Score (milli-bits) of an output of a tx with `foreign_inputs`
-    non-wallet inputs that spends own coins scored `own_input_mbits`
-    (None = unknown). -> None when any own input is unknown.
-
-    Integer form of round(1000 * (log2(f + 1) + min_bits)): input scores
-    are already whole milli-bits, so only the log term is rounded."""
+    """Score (milli-bits) of a tx with `foreign_inputs` non-wallet inputs
+    that spends own coins scored `own_input_mbits` (None = unknown).
+    -> None when any own input is unknown (core ComputePrivacyMilliBits)."""
     if foreign_inputs < 0:
         raise ValueError('foreign_inputs must be >= 0')
     if not own_input_mbits:
         return 0
     if any(m is None for m in own_input_mbits):
         return None
-    return int(round(1000 * math.log2(foreign_inputs + 1))) + min(own_input_mbits)
+    lowest = min(min(own_input_mbits), MBITS_MAX)
+    return min(lowest + log2_mbits(foreign_inputs + 1), MBITS_MAX)
 
 
-def score_for_inputs(input_hashes: Sequence[str],
-                     outputs: Dict[str, dict]) -> Optional[int]:
-    """Score for an output of a tx spending `input_hashes` (all its inputs,
-    by output hash), given the wallet's {output_hash: coin dict}. Inputs
-    not in `outputs` are foreign."""
-    own = [h for h in input_hashes if h in outputs]
-    foreign = len(input_hashes) - len(own)
-    return privacy_mbits(foreign, [outputs[h].get(PRIVACY_KEY) for h in own])
+def output_mbits(tx_mbits: Optional[int], foreign_inputs: int, made_by_us: bool) -> Optional[int]:
+    """Score of one of our outputs of a tx scored `tx_mbits` (core
+    OutputPrivacyMilliBits)."""
+    if foreign_inputs == 0 or made_by_us:
+        return tx_mbits
+    return 0
+
+
+class TxPrivacy:
+    """Privacy context of one transaction, for scoring its outputs of ours.
+
+    `input_hashes`: every input (spent output hash) of the tx, ours and
+    foreign. `created_hashes`: the tx's own output hashes; an input spending
+    one of them (a chain of sends a staker merged into one block tx) counts
+    as neither own nor foreign. `outputs`: the wallet's {output_hash: coin}.
+    """
+
+    def __init__(self, input_hashes: Sequence[str], outputs: Dict[str, dict],
+                 created_hashes: Sequence[str] = ()):
+        created = set(created_hashes)
+        own = []
+        self.foreign = 0
+        # our spent NAV coins as (address, amount): a cover return matches one
+        self._own_spent = []  # type: List[Tuple[str, int]]
+        for h in input_hashes:
+            if h in created:
+                continue
+            d = outputs.get(h)
+            if d is None:
+                self.foreign += 1
+                continue
+            own.append(d.get(PRIVACY_KEY))
+            if not d.get('token_id'):
+                self._own_spent.append((d.get('address'), d.get('amount')))
+        self.tx_mbits = privacy_mbits(self.foreign, own)
+
+    def _take_cover_return(self, *, memo, address, amount, token_id) -> bool:
+        """Is this output a served cover coming back: the candidate memo,
+        NAV, the address and amount of a coin of ours the tx spends (each
+        spent coin matches once; core OutputIsCoverReturn)."""
+        if not self._own_spent or memo != COVER_CANDIDATE_MEMO or token_id:
+            return False
+        try:
+            self._own_spent.remove((address, amount))
+        except ValueError:
+            return False
+        return True
+
+    def score_output(self, *, is_change: bool, memo: str, address: str,
+                     amount: int, token_id: Optional[str]) -> Optional[int]:
+        """Score of one of our outputs; call once per output, in vout order."""
+        made_by_us = is_change or self._take_cover_return(
+            memo=memo, address=address, amount=amount, token_id=token_id)
+        return output_mbits(self.tx_mbits, self.foreign, made_by_us)
 
 
 def mbits_to_bits(mbits: Optional[int]) -> Optional[float]:

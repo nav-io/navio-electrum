@@ -26,12 +26,25 @@ class TestPrivacyScore(unittest.TestCase):
         self.assertIsNone(bp.privacy_mbits(4, [1000, None]))
 
     def test_aggregates_with_n_foreign_inputs(self):
-        for n in range(0, 40):
-            self.assertEqual(bp.privacy_mbits(n, [0]), round(1000 * math.log2(n + 1)))
+        # floor(1000 * log2(n + 1)), like navio-core's Log2MilliBits
+        for n in range(0, 2000):
+            self.assertEqual(bp.privacy_mbits(n, [0]), math.floor(1000 * math.log2(n + 1)))
         self.assertEqual(bp.privacy_mbits(1, [0]), 1000)
-        self.assertEqual(bp.privacy_mbits(2, [0]), 1585)   # log2(3) = 1.58496
+        self.assertEqual(bp.privacy_mbits(2, [0]), 1584)   # log2(3) = 1.58496
         self.assertEqual(bp.privacy_mbits(7, [500]), 3500)
-        self.assertEqual(bp.privacy_mbits(9, [0]), 3322)   # log2(10) = 3.32193
+        self.assertEqual(bp.privacy_mbits(9, [0]), 3321)   # log2(10) = 3.32193
+
+    def test_log2_mbits(self):
+        self.assertEqual(bp.log2_mbits(1), 0)
+        self.assertEqual(bp.log2_mbits(2 ** 40), 40000)
+        self.assertEqual(bp.log2_mbits(2 ** 40 + 1), 40000)
+        self.assertEqual(bp.log2_mbits(2 ** 40 - 1), 39999)
+        with self.assertRaises(ValueError):
+            bp.log2_mbits(0)
+
+    def test_saturates(self):
+        self.assertEqual(bp.privacy_mbits(3, [bp.MBITS_MAX - 1]), bp.MBITS_MAX)
+        self.assertEqual(bp.privacy_mbits(0, [2 ** 40]), bp.MBITS_MAX)
 
     def test_mixing_rounds_accumulate(self):
         # a served cover's returned coin: log2(foreign + 1) + our coin's score
@@ -40,21 +53,52 @@ class TestPrivacyScore(unittest.TestCase):
             s = bp.privacy_mbits(3, [s])
         self.assertEqual(s, 6000)
 
+    def test_output_made_by_us_rule(self):
+        # no foreign inputs: every output of ours takes the tx score
+        self.assertEqual(bp.output_mbits(2500, 0, False), 2500)
+        # foreign inputs: only change / a cover return keeps it
+        self.assertEqual(bp.output_mbits(2500, 3, True), 2500)
+        self.assertEqual(bp.output_mbits(2500, 3, False), 0)
+        self.assertEqual(bp.output_mbits(None, 3, False), 0)
+        self.assertIsNone(bp.output_mbits(None, 3, True))
+
     def test_negative_foreign_rejected(self):
         with self.assertRaises(ValueError):
             bp.privacy_mbits(-1, [0])
 
-    def test_score_for_inputs(self):
+    def test_tx_privacy_score(self):
         outs = {'a': {'privacy_mbits': 2000}, 'b': {'privacy_mbits': 1000}, 'c': {}}
-        self.assertEqual(bp.score_for_inputs([], outs), 0)
-        self.assertEqual(bp.score_for_inputs(['x', 'y'], outs), 0)
-        self.assertEqual(bp.score_for_inputs(['a', 'b'], outs), 1000)
-        self.assertEqual(bp.score_for_inputs(['a', 'x', 'y', 'z'], outs), 4000)
-        self.assertIsNone(bp.score_for_inputs(['a', 'c', 'x'], outs))
+        tx = lambda ins, created=(): bp.TxPrivacy(ins, outs, created).tx_mbits
+        self.assertEqual(tx([]), 0)
+        self.assertEqual(tx(['x', 'y']), 0)
+        self.assertEqual(tx(['a', 'b']), 1000)
+        self.assertEqual(tx(['a', 'x', 'y', 'z']), 4000)
+        self.assertIsNone(tx(['a', 'c', 'x']))
+        # an input spending an output of the same (merged block) tx is
+        # neither own nor foreign
+        self.assertEqual(tx(['a', 'x', 'm1'], created=['m1', 'm2']), 3000)
+
+    def test_tx_privacy_outputs(self):
+        outs = {'mine': {'privacy_mbits': 2000, 'address': 'A', 'amount': 5},
+                'tok': {'privacy_mbits': 2000, 'address': 'A', 'amount': 7, 'token_id': 'ff'}}
+        ctx = bp.TxPrivacy(['mine', 'tok', 'x', 'y', 'z'], outs)
+        self.assertEqual(ctx.tx_mbits, 4000)
+        kw = dict(is_change=False, memo='candidate', address='A', amount=5, token_id=None)
+        # paid to us by a foreign input's owner: 0
+        self.assertEqual(ctx.score_output(**dict(kw, memo='hi')), 0)
+        # change keeps the tx score
+        self.assertEqual(ctx.score_output(**dict(kw, is_change=True, memo='')), 4000)
+        # token outputs and wrong amounts are no cover return
+        self.assertEqual(ctx.score_output(**dict(kw, amount=7)), 0)
+        self.assertEqual(ctx.score_output(**dict(kw, token_id='ff')), 0)
+        # the cover return of our spent NAV coin matches once
+        self.assertEqual(ctx.score_output(**kw), 4000)
+        self.assertEqual(ctx.score_output(**kw), 0)
 
     def test_display_and_helpers(self):
         self.assertEqual(bp.format_bits(None), '–')
         self.assertEqual(bp.format_bits(1585), '1.58')   # 1.585 is 1.58499.. as a float
+        self.assertEqual(bp.format_bits(None), '\u2013')
         self.assertEqual(bp.format_bits(3322), '3.32')
         self.assertEqual(bp.format_bits(0), '0.00')
         self.assertEqual(bp.bits_to_mbits(1.5), 1500)

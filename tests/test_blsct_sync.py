@@ -60,7 +60,9 @@ class _FakeWallet:
         self.blsct_sync = {}
         self._blsct_lock = threading.RLock()
 
+    privacy_context = Blsct_Wallet.privacy_context
     privacy_score_for_inputs = Blsct_Wallet.privacy_score_for_inputs
+    _score_stored_output = Blsct_Wallet._score_stored_output
     _set_privacy_score = staticmethod(Blsct_Wallet._set_privacy_score)
 
     def _mark_spent(self, output_hash, tx_hash, height, ref=None):
@@ -128,7 +130,7 @@ class TestBlsctSync(ElectrumTestCase):
         stored = []
 
         async def fake_store(tx_hash, height, ohash, bk, pair, *, coinbase=False, out_hex=None,
-                             privacy_mbits=None):
+                             privacy=None):
             stored.append((tx_hash, height, ohash, coinbase, out_hex))
 
         s._fetch_and_store_output = fake_store
@@ -141,16 +143,24 @@ class TestBlsctSync(ElectrumTestCase):
         ])
 
 
-def _store_into(wallet, stored=None):
-    """_fetch_and_store_output stand-in: keeps the given score like the
-    real one (new and existing outputs alike)."""
+CHANGE = -1
+
+
+def _store_into(wallet, meta=None):
+    """_fetch_and_store_output stand-in: stores the output (its account,
+    memo, address, amount from `meta`, default a plain receive on the main
+    account) and scores it from the tx context like the real one."""
+    meta = meta or {}
+
     async def store(tx_hash, height, ohash, bk, pair, *, coinbase=False, out_hex=None,
-                    privacy_mbits=blsct_wallet._SCORE_NOT_GIVEN):
-        d = wallet.blsct_outputs.setdefault(ohash, {'spent_by': None})
+                    privacy=None):
+        d = wallet.blsct_outputs.get(ohash)
+        if d is None:
+            d = dict({'account': 0, 'memo': '', 'address': 'addr-' + ohash, 'amount': 1,
+                      'token_id': None, 'spent_by': None}, **meta.get(ohash, {}))
+            wallet.blsct_outputs[ohash] = d
         d.update(tx_hash=tx_hash, height=height)
-        wallet._set_privacy_score(d, privacy_mbits)
-        if stored is not None:
-            stored.append(ohash)
+        wallet._set_privacy_score(d, wallet._score_stored_output(privacy, d))
     return store
 
 
@@ -169,16 +179,23 @@ class TestBlsctSyncPrivacy(ElectrumTestCase):
 
     async def test_scores_along_a_chain(self):
         s = _sync(mine={'mine'})
-        s._fetch_and_store_output = _store_into(s.wallet)
+        s._fetch_and_store_output = _store_into(s.wallet, {
+            'r1': {'address': 'A1', 'amount': 50},
+            # our served candidate (r1) coming back: same address and amount
+            'c1': {'address': 'A1', 'amount': 50, 'memo': 'candidate'},
+            # paid to us inside the same aggregate by a foreign input's owner
+            'p1': {'address': 'A2', 'amount': 9, 'memo': 'hi'},
+            'ch': {'account': CHANGE},
+        })
         await self._run(s, [
             # coinbase / staking reward: no inputs
             [['cb', {'vout': [_out('r1', 'mine')], 'vin': []}]],
             # a plain receive: only foreign inputs
             [['rx', {'vout': [_out('r2', 'mine'), _out('f1', 'x')],
                      'vin': [_vin('a'), _vin('b')]}]],
-            # someone else's aggregate spends our served candidate (r1)
-            # with 3 foreign inputs: our coin comes back with log2(4) = 2 bits
-            [['agg', {'vout': [_out('c1', 'mine'), _out('f2', 'x')],
+            # someone else's aggregate spends our served candidate (r1) with
+            # 3 foreign inputs: our coin comes back with log2(4) = 2 bits
+            [['agg', {'vout': [_out('c1', 'mine'), _out('p1', 'mine'), _out('f2', 'x')],
                       'vin': [_vin('r1'), _vin('p'), _vin('q'), _vin('r')]}]],
             # our own send spends c1 (2 bits) and r2 (0 bits): change keeps 0
             [['send', {'vout': [_out('ch', 'mine'), _out('dst', 'x')],
@@ -187,12 +204,14 @@ class TestBlsctSyncPrivacy(ElectrumTestCase):
         self.assertEqual(self.score(s, 'r1'), 0)
         self.assertEqual(self.score(s, 'r2'), 0)
         self.assertEqual(self.score(s, 'c1'), 2000)
+        self.assertEqual(self.score(s, 'p1'), 0)
         self.assertEqual(self.score(s, 'ch'), 0)
         self.assertEqual(s.wallet.blsct_outputs['r1']['spent_by'], 'agg')
 
     async def test_same_block_chain_and_unknown_inputs(self):
         s = _sync(mine={'mine'})
-        s._fetch_and_store_output = _store_into(s.wallet)
+        s._fetch_and_store_output = _store_into(s.wallet, {
+            'o1': {'account': CHANGE}, 'o2': {'account': CHANGE}, 'o3': {'account': CHANGE}})
         s.wallet.blsct_outputs['old'] = {'spent_by': None}   # synced before scores
         s.wallet.blsct_outputs['good'] = {'spent_by': None, 'privacy_mbits': 3000}
         await self._run(s, [[
@@ -205,6 +224,19 @@ class TestBlsctSyncPrivacy(ElectrumTestCase):
         self.assertEqual(self.score(s, 'o2'), 5000)
         self.assertIsNone(self.score(s, 'o3'))   # 'old' is unknown
 
+    async def test_merged_chain_in_one_block_tx(self):
+        # the staker merged our send and a send spending its change into one
+        # block tx: the input spending the tx's own output is not a source
+        s = _sync(mine={'mine'})
+        s._fetch_and_store_output = _store_into(s.wallet, {
+            'm1': {'account': CHANGE}, 'm2': {'account': CHANGE}})
+        s.wallet.blsct_outputs['in'] = {'spent_by': None, 'privacy_mbits': 1000}
+        await self._run(s, [[
+            ['merged', {'vout': [_out('m1', 'mine'), _out('m2', 'mine')],
+                        'vin': [_vin('in'), _vin('m1'), _vin('f')]}],
+        ]])
+        self.assertEqual(self.score(s, 'm2'), 2000)
+
     async def test_block_view_replaces_mempool_score(self):
         # our broadcast stored change at 1.5 bits (process_own_transaction);
         # the staker merged our send with 7 more foreign inputs
@@ -212,14 +244,13 @@ class TestBlsctSyncPrivacy(ElectrumTestCase):
         s._fetch_and_store_output = _store_into(s.wallet)
         w = s.wallet.blsct_outputs
         w['in1'] = {'spent_by': 'mempool', 'privacy_mbits': 1500}
-        w['ch'] = {'spent_by': None, 'height': 0, 'privacy_mbits': 1500}
+        w['ch'] = {'spent_by': None, 'height': 0, 'privacy_mbits': 1500, 'account': CHANGE}
         await self._run(s, [[
             ['blocktx', {'vout': [_out('ch', 'mine')],
                          'vin': [_vin('in1')] + [_vin(f'x{i}') for i in range(7)]}],
         ]])
         self.assertEqual(self.score(s, 'ch'), 1500 + 3000)
         self.assertEqual(w['ch']['height'], 100)
-
     async def test_rescan_request_rewinds(self):
         s = _sync()
         s.wallet.blsct_sync.update(creation_height=50, last_height=900,

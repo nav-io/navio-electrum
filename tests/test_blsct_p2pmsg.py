@@ -363,9 +363,14 @@ class TestAggregatedSend(ElectrumTestCase):
         built = w.create_blsct_transaction([(w.keyring.address(0, 9), 7_0000_0000, '')])
         self._fake_network(w, reject_first=False)
         await w.broadcast_blsct_transaction(built.raw_hex)
-        change = [d for d in w.blsct_outputs.values() if d['height'] == 0]
+        from electrum.navio_blsct import CHANGE_ACCOUNT
+        new = [d for d in w.blsct_outputs.values() if d['height'] == 0]
+        change = [d for d in new if d['account'] == CHANGE_ACCOUNT]
         self.assertTrue(change)
         self.assertEqual({1500}, {d.get('privacy_mbits') for d in change})
+        # our destination output (a send to self) in a tx with foreign
+        # inputs is not change: it scores 0 like any receive
+        self.assertEqual({0}, {d.get('privacy_mbits') for d in new if d not in change})
 
     async def test_fallback_plain_change_privacy_score(self):
         w = self._wallet()
