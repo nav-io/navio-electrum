@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt, QAbstractListModel, QModelIndex
 
 from electrum.logging import get_logger
 from electrum.util import Satoshis, coin_name, coin_txid, coin_short_name
+from electrum import blsct_privacy
 
 from electrum.gui.common_qt.util import QtEventListener, qt_event_listener
 
@@ -111,7 +112,7 @@ class QEAddressCoinListModel(QAbstractListModel, QtEventListener):
 
     # define listmodel rolemap
     _ROLE_NAMES=('type', 'addridx', 'address', 'label', 'balance', 'numtx', 'held', 'height', 'amount', 'outpoint',
-                 'short_outpoint', 'short_id', 'txid')
+                 'short_outpoint', 'short_id', 'txid', 'privacy')
     _ROLE_KEYS = range(Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + len(_ROLE_NAMES))
     _ROLE_MAP  = dict(zip(_ROLE_KEYS, [bytearray(x.encode()) for x in _ROLE_NAMES]))
     _ROLE_RMAP = dict(zip(_ROLE_NAMES, _ROLE_KEYS))
@@ -192,6 +193,9 @@ class QEAddressCoinListModel(QAbstractListModel, QtEventListener):
             'txid': txid,
             'label': self.wallet.get_label_for_txid(txid) or '',
             'held': self.wallet.is_frozen_coin(coin),
+            # BLSCT privacy score: '' when not a BLSCT coin, a dash if unknown
+            'privacy': (blsct_privacy.format_bits(coin.privacy_mbits)
+                        if hasattr(coin, 'privacy_mbits') else ''),
             'coin': coin
         }
         return item

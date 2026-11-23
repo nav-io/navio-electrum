@@ -81,6 +81,15 @@ ItemDelegate {
             }
 
             Label {
+                // BLSCT privacy score of the coin (bits)
+                Layout.fillWidth: true
+                visible: model.privacy !== undefined && model.privacy != ''
+                font.pixelSize: constants.fontSizeSmall
+                color: constants.mutedForeground
+                text: qsTr('Privacy: %1 bits').arg(model.privacy)
+            }
+
+            Label {
                 id: labelLabel
                 Layout.fillWidth: true
                 visible: model.label

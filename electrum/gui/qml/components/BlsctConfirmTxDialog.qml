@@ -140,6 +140,62 @@ ElDialog {
                     }
                 }
 
+                Label {
+                    Layout.columnSpan: 2
+                    text: qsTr('Privacy')
+                    color: Material.accentColor
+                }
+
+                DialogHighlightPane {
+                    Layout.columnSpan: 2
+                    Layout.fillWidth: true
+                    GridLayout {
+                        width: parent.width
+                        columns: 2
+                        Label {
+                            text: qsTr('Minimum')
+                            color: constants.mutedForeground
+                        }
+                        ElComboBox {
+                            id: minPrivacy
+                            Layout.fillWidth: true
+                            textRole: 'text'
+                            valueRole: 'value'
+                            enabled: !finalizer.busy
+                            model: ListModel {
+                                id: minPrivacyModel
+                                Component.onCompleted: {
+                                    // we need to fill the model like this, as ListElement can't evaluate script
+                                    minPrivacyModel.append({'text': qsTr('Off'), 'value': 0})
+                                    for (const b of [1, 2, 3, 4, 6, 8, 12, 16])
+                                        minPrivacyModel.append({'text': qsTr('%1 bits').arg(b), 'value': b})
+                                    minPrivacy.currentIndex = 0
+                                    for (let i = 0; i < minPrivacyModel.count; i++) {
+                                        if (minPrivacyModel.get(i).value == finalizer.minPrivacy) {
+                                            minPrivacy.currentIndex = i
+                                            break
+                                        }
+                                    }
+                                }
+                            }
+                            onActivated: finalizer.minPrivacy = currentValue
+                        }
+                        Label {
+                            text: qsTr('Your change')
+                            color: constants.mutedForeground
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            font.family: FixedFont
+                            text: finalizer.valid
+                                ? (finalizer.privacyText != ''
+                                    ? qsTr('%1 bits').arg(finalizer.privacyText)
+                                    : qsTr('unknown'))
+                                : ''
+                        }
+                    }
+                }
+
                 InfoTextArea {
                     Layout.columnSpan: 2
                     Layout.fillWidth: true

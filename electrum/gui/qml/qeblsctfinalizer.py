@@ -7,6 +7,7 @@ from PyQt6.QtCore import pyqtProperty, pyqtSignal, pyqtSlot, QObject, QVariant
 from electrum.i18n import _
 from electrum.logging import get_logger
 from electrum.util import get_asyncio_loop
+from electrum import blsct_privacy
 
 from .auth import AuthMixin, auth_protect
 from .qewallet import QEWallet
@@ -28,6 +29,7 @@ class QEBlsctFinalizer(AuthMixin, QObject):
     feeChanged = pyqtSignal()
     effectiveAmountChanged = pyqtSignal()
     warningChanged = pyqtSignal()
+    privacyChanged = pyqtSignal()
     finished = pyqtSignal([str], arguments=['txid'])
     sendFailed = pyqtSignal([str], arguments=['message'])
 
@@ -43,6 +45,9 @@ class QEBlsctFinalizer(AuthMixin, QObject):
         self._valid = False
         self._busy = False
         self._built = None
+        self._update_pending = False
+        self._min_privacy = 0.0   # bits; 0 = off
+        self._privacy_text = ''
 
     walletChanged = pyqtSignal()
     @pyqtProperty(QVariant, notify=walletChanged)
@@ -54,6 +59,9 @@ class QEBlsctFinalizer(AuthMixin, QObject):
         assert wallet is None or isinstance(wallet, QEWallet)
         if self._wallet != wallet:
             self._wallet = wallet
+            if wallet is not None:
+                self._min_privacy = float(wallet.wallet.config.BLSCT_MIN_PRIVACY or 0)
+                self.minPrivacyChanged.emit()
             self.walletChanged.emit()
 
     addressChanged = pyqtSignal()
@@ -107,6 +115,34 @@ class QEBlsctFinalizer(AuthMixin, QObject):
             self._warning = warning
             self.warningChanged.emit()
 
+    minPrivacyChanged = pyqtSignal()
+    @pyqtProperty(float, notify=minPrivacyChanged)
+    def minPrivacy(self):
+        """Only spend coins with at least this privacy score (bits); 0 = off.
+        Kept in the blsct_min_privacy config, like the desktop send tab."""
+        return self._min_privacy
+
+    @minPrivacy.setter
+    def minPrivacy(self, bits: float):
+        bits = max(0.0, float(bits))
+        if self._min_privacy != bits:
+            self._min_privacy = bits
+            if self._wallet:
+                self._wallet.wallet.config.BLSCT_MIN_PRIVACY = bits
+            self.minPrivacyChanged.emit()
+            self.doUpdate()
+
+    @pyqtProperty(str, notify=privacyChanged)
+    def privacyText(self):
+        """Privacy score (bits, 2 decimals) our new outputs (change) will
+        get, '' while unknown or not built."""
+        return self._privacy_text
+
+    def set_privacy_text(self, text: str):
+        if self._privacy_text != text:
+            self._privacy_text = text
+            self.privacyChanged.emit()
+
     @pyqtProperty(bool, notify=validChanged)
     def valid(self):
         return self._valid
@@ -136,10 +172,12 @@ class QEBlsctFinalizer(AuthMixin, QObject):
         if not self._amount.isMax and self._amount.satsInt <= 0:
             return
         if self._busy:
+            self._update_pending = True   # inputs changed while building
             return
 
         self.set_valid(False)
         self.set_warning('')
+        self.set_privacy_text('')
         self.set_busy(True)
         self._built = None
 
@@ -148,7 +186,11 @@ class QEBlsctFinalizer(AuthMixin, QObject):
         address = self._address
         memo = self._message
         is_max = self._amount.isMax
-        amount = wallet.get_spendable_balance_sat() if is_max else self._amount.satsInt
+        min_privacy = self._min_privacy or None
+        if is_max:
+            amount = sum(c.d['amount'] for c in wallet.send_candidate_coins(None, min_privacy))
+        else:
+            amount = self._amount.satsInt
 
         def build_task():
             try:
@@ -156,21 +198,42 @@ class QEBlsctFinalizer(AuthMixin, QObject):
                     [(address, amount, memo)],
                     password=password,
                     subtract_fee_from_amount=is_max,
+                    min_privacy=min_privacy,
                 )
             except Exception as e:
                 self._logger.error(f'could not build blsct tx: {e!r}')
                 self.set_warning(str(e) or repr(e))
                 self.set_busy(False)
+                self._maybe_rerun()
                 return
             self._built = built
+            self.set_privacy_text(self._result_privacy_text(wallet, built))
             self._fee.satsInt = built.fee
             self.feeChanged.emit()
             self._effectiveAmount.satsInt = amount - built.fee if is_max else amount
             self.effectiveAmountChanged.emit()
             self.set_busy(False)
             self.set_valid(True)
+            self._maybe_rerun()
 
         threading.Thread(target=build_task, daemon=True).start()
+
+    def _maybe_rerun(self):
+        if self._update_pending:
+            self._update_pending = False
+            self.doUpdate()
+
+    @staticmethod
+    def _result_privacy_text(wallet, built) -> str:
+        """Score our new outputs will get, from the built tx's inputs (covers
+        of an aggregate count as foreign inputs)."""
+        from electrum.navio_blsct import parse_tx_hex
+        try:
+            inputs = [i.prevout_hash for i in parse_tx_hex(built.raw_hex).inputs]
+        except Exception:
+            return ''
+        mbits = wallet.privacy_score_for_inputs(inputs)
+        return '' if mbits is None else blsct_privacy.format_bits(mbits)
 
     @pyqtSlot()
     @auth_protect(message=_('Send Navio transaction?'))
