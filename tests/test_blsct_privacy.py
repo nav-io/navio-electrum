@@ -221,3 +221,23 @@ class TestWalletPrivacySelection(ElectrumTestCase):
         self.assertIsNone(w.blsct_outputs['33' * 32].get('privacy_mbits'))
         self.assertIsNone(
             [u for u in w.get_utxos() if u.output_hash == '33' * 32][0].to_json()['privacy_bits'])
+
+    async def test_commands(self):
+        from electrum.commands import Commands
+        from electrum.blsct_privacy import NotEnoughPrivateFunds
+        w = self._wallet()
+        w.config.BLSCT_AGGREGATE_SENDS = False
+        cmds = Commands(config=self.config)
+        coins = {c['output_hash'][:2]: c for c in await cmds.listunspent(wallet=w)}
+        self.assertEqual(coins['11']['privacy_bits'], 4.2)
+        self.assertIsNone(coins['33']['privacy_bits'])
+        dest = w.keyring.address(0, 9)
+        with self.assertRaises(NotEnoughPrivateFunds):
+            await cmds.payto(dest, '10', min_privacy='4', wallet=w)
+        res = await cmds.payto(dest, '!', min_privacy='4', wallet=w)
+        p = nb.parse_tx_hex(res['hex'])
+        self.assertEqual({'11' * 32, '55' * 32}, {i.prevout_hash for i in p.inputs})
+        res = await cmds.paytomany([[dest, '2.5']], min_privacy='4.5', wallet=w)
+        self.assertEqual({'55' * 32}, {i.prevout_hash for i in nb.parse_tx_hex(res['hex']).inputs})
+        self.assertEqual(await cmds.rescan(wallet=w), {'rescan_requested': True, 'unscored_coins': 1})
+        self.assertTrue(w.blsct_sync['rescan_requested'])

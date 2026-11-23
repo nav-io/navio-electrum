@@ -477,6 +477,18 @@ class Commands(Logger):
             coins.append(d)
         return coins
 
+    @command('w')
+    async def rescan(self, wallet: Abstract_Wallet = None):
+        """Scan the chain again from the wallet's creation height (BLSCT
+        wallets). Coins already known are kept; their privacy scores and
+        spent state are recomputed, which gives coins synced by older
+        versions a privacy score."""
+        if not hasattr(wallet, 'request_blsct_rescan'):
+            raise UserFacingException('rescan is only available for BLSCT wallets')
+        unscored = wallet.num_unscored_coins()
+        wallet.request_blsct_rescan()
+        return {'rescan_requested': True, 'unscored_coins': unscored}
+
     @command('n')
     async def broadcast(self, tx):
         """
@@ -711,7 +723,7 @@ class Commands(Logger):
 
     @command('wp')
     async def payto(self, destination, amount, fee=None, memo=None, from_coins=None,
-                    password=None, wallet: Abstract_Wallet = None):
+                    min_privacy=None, password=None, wallet: Abstract_Wallet = None):
         """Create and sign a Navio transaction. Returns {'hex','txid','fee'};
         broadcast it with the broadcast command.
 
@@ -719,33 +731,35 @@ class Commands(Logger):
         arg:decimal_or_max:amount:Amount to be sent (in NAV). Type '!' to send the maximum available.
         arg:decimal:fee:Transaction fee (absolute, in NAV; default: automatic)
         arg:str:memo:Encrypted memo embedded in the output
-        arg:json:from_coins:Restrict source coins (list of output hashes)
+        arg:json:from_coins:Restrict source coins (list of output hashes); the minimum privacy does not apply to them
+        arg:decimal:min_privacy:Only spend coins with at least this privacy score (bits); unscored coins are excluded
         """
         tx_fee = satoshis(fee)
         domain_coins = from_coins.split(',') if isinstance(from_coins, str) else from_coins
+        min_privacy = None if min_privacy is None else float(min_privacy)
         amount_sat = satoshis_or_max(amount)
         subtract = amount_sat == '!'
         if subtract:
-            coins = wallet.get_spendable_coins()
-            if domain_coins:
-                coins = [c for c in coins if c.output_hash in domain_coins]
+            coins = wallet.send_candidate_coins(domain_coins, min_privacy)
             amount_sat = sum(c.d['amount'] for c in coins)
         built = wallet.create_blsct_transaction(
             [(destination, amount_sat, memo or '')],
             password=password,
             fixed_fee=tx_fee,
             domain_coins=domain_coins,
-            subtract_fee_from_amount=subtract)
+            subtract_fee_from_amount=subtract,
+            min_privacy=min_privacy)
         return {'hex': built.raw_hex, 'txid': built.txid, 'fee': built.fee}
 
     @command('wp')
-    async def paytomany(self, outputs, fee=None, from_coins=None,
+    async def paytomany(self, outputs, fee=None, from_coins=None, min_privacy=None,
                         password=None, wallet: Abstract_Wallet = None):
         """Create and sign a multi-output Navio transaction.
 
         arg:json:outputs:json list of ["address", "amount in NAV"]
         arg:decimal:fee:Transaction fee (absolute, in NAV; default: automatic)
-        arg:json:from_coins:Restrict source coins (list of output hashes)
+        arg:json:from_coins:Restrict source coins (list of output hashes); the minimum privacy does not apply to them
+        arg:decimal:min_privacy:Only spend coins with at least this privacy score (bits); unscored coins are excluded
         """
         tx_fee = satoshis(fee)
         domain_coins = from_coins.split(',') if isinstance(from_coins, str) else from_coins
@@ -754,7 +768,8 @@ class Commands(Logger):
             recipients,
             password=password,
             fixed_fee=tx_fee,
-            domain_coins=domain_coins)
+            domain_coins=domain_coins,
+            min_privacy=None if min_privacy is None else float(min_privacy))
         return {'hex': built.raw_hex, 'txid': built.txid, 'fee': built.fee}
 
     @command('wp')
