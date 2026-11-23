@@ -23,6 +23,7 @@ from .util import NotEnoughFunds
 
 PRIVACY_KEY = 'privacy_mbits'
 UNKNOWN_BUCKET = -1
+UNKNOWN_TEXT = '\u2013'   # en dash: shown for an unknown score
 
 
 def privacy_mbits(foreign_inputs: int,
@@ -60,7 +61,7 @@ def bits_to_mbits(bits: Optional[float]) -> Optional[int]:
     return None if bits is None else int(round(bits * 1000))
 
 
-def format_bits(mbits: Optional[int], unknown: str = '–') -> str:
+def format_bits(mbits: Optional[int], unknown: str = UNKNOWN_TEXT) -> str:
     """Display form: bits with 2 decimals, `unknown` when not known."""
     return unknown if mbits is None else f'{mbits / 1000:.2f}'
 
