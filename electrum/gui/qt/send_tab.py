@@ -9,7 +9,8 @@ import urllib.parse
 
 from PyQt6.QtCore import pyqtSignal, QPoint, Qt
 from PyQt6.QtWidgets import (QLabel, QVBoxLayout, QGridLayout, QHBoxLayout,
-                             QWidget, QToolTip, QPushButton, QApplication, QSlider)
+                             QWidget, QToolTip, QPushButton, QApplication, QSlider,
+                             QDoubleSpinBox)
 
 from electrum.i18n import _
 from electrum.logging import Logger
@@ -29,6 +30,7 @@ from electrum.payment_identifier import (PaymentIdentifierType, PaymentIdentifie
 from electrum.submarine_swaps import SwapServerError
 from electrum.fee_policy import FeePolicy, FixedFeePolicy
 from electrum.lnurl import LNURL3Data, request_lnurl_withdraw_callback, LNURLError
+from electrum import blsct_privacy
 
 from .amountedit import AmountEdit, BTCAmountEdit, SizedFreezableLineEdit
 from .paytoedit import InvalidPaymentIdentifier
@@ -143,6 +145,9 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
         self.invoice_error.setIcon(invoice_error_icon)
         grid.addWidget(self.invoice_error, 3, 4, Qt.AlignmentFlag.AlignRight)
 
+        if self.wallet.wallet_type == 'blsct':
+            self._create_min_privacy_row(grid, 4)
+
         self.paste_button = QPushButton(_('Paste'))
         self.paste_button.clicked.connect(self.do_paste)
         self.paste_button.setIcon(read_QIcon('copy.png'))
@@ -208,6 +213,64 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
 
         self.setTabOrder(self.send_button, self.invoice_list)
 
+    def _create_min_privacy_row(self, grid: QGridLayout, row: int):
+        cv = self.config.cv.BLSCT_MIN_PRIVACY
+        label = HelpLabel(cv.get_short_desc(), cv.get_long_desc())
+        sb = self.min_privacy_sb = QDoubleSpinBox()
+        sb.setRange(0, 64)
+        sb.setDecimals(2)
+        sb.setSingleStep(0.5)
+        sb.setSuffix(' ' + _('bits'))
+        sb.setSpecialValueText(_('Off'))   # shown at the minimum (0)
+        sb.setValue(self.config.BLSCT_MIN_PRIVACY or 0)
+        sb.setFixedWidth(14 * char_width_in_lineedit())
+        self.min_privacy_info = QLabel()
+        self.min_privacy_info.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
+
+        def on_change(v):
+            self.config.BLSCT_MIN_PRIVACY = float(v)
+            self.update_min_privacy_info()
+            if self.max_button.isChecked():
+                self.spend_max()
+        sb.valueChanged.connect(on_change)
+        hbox = QHBoxLayout()
+        hbox.addWidget(sb)
+        hbox.addWidget(self.min_privacy_info)
+        hbox.addStretch(1)
+        grid.addWidget(label, row, 0)
+        grid.addLayout(hbox, row, 1, 1, -1)
+        self.update_min_privacy_info()
+
+    def get_min_privacy(self) -> Optional[float]:
+        """Privacy floor (bits) for BLSCT sends, None when off."""
+        sb = getattr(self, 'min_privacy_sb', None)
+        if sb is None or sb.value() <= 0:
+            return None
+        return float(sb.value())
+
+    def get_blsct_domain_coins(self) -> Optional[List[str]]:
+        """Output hashes picked with coin control (UTXO list), if any."""
+        utxo_list = getattr(self.window, 'utxo_list', None)   # created after this tab
+        coins = utxo_list.get_spend_list() if utxo_list else None
+        return [c.output_hash for c in coins] if coins else None
+
+    def blsct_max_amount(self) -> int:
+        coins = self.wallet.send_candidate_coins(
+            self.get_blsct_domain_coins(), self.get_min_privacy())
+        return sum(c.d['amount'] for c in coins)
+
+    def update_min_privacy_info(self):
+        info = getattr(self, 'min_privacy_info', None)
+        if info is None:
+            return
+        if self.get_blsct_domain_coins():
+            info.setText(_('Not applied: coin control is active'))
+        elif self.get_min_privacy() is None:
+            info.setText('')
+        else:
+            info.setText(_('{} available').format(
+                self.format_amount_and_units(self.blsct_max_amount())))
+
     def on_amount_changed(self, text):
         # FIXME: implement full valid amount check to enable/disable Pay button
         pi = self.payto_e.payment_identifier
@@ -255,7 +318,7 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
             # (pay_blsct_dialog), with the fee subtracted from the amount;
             # the generic make_unsigned_transaction pipeline does not apply
             self.max_button.setChecked(True)
-            self.amount_e.setAmount(self.wallet.get_spendable_balance_sat())
+            self.amount_e.setAmount(self.blsct_max_amount())
             return
         outputs = pi.get_onchain_outputs('!')
         if not outputs:
@@ -637,12 +700,15 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
                 recipients.append((addr, 0, memo))
             else:
                 recipients.append((addr, o.value, memo))
+        domain_coins = self.get_blsct_domain_coins()
+        # coin control overrides the privacy floor
+        min_privacy = None if domain_coins else self.get_min_privacy()
         if is_max:
             if len(recipients) != 1:
                 self.show_error(_('Max spend requires a single recipient'))
                 return
             addr, _amt, m = recipients[0]
-            recipients = [(addr, self.wallet.get_spendable_balance_sat(), m)]
+            recipients = [(addr, self.blsct_max_amount(), m)]
         total = sum(r[1] for r in recipients)
         if total <= 0:
             self.show_error(_('No amount'))
@@ -653,7 +719,8 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
             from .airgap_dialogs import AirgapSignDialog
             try:
                 proposal = self.wallet.make_send_proposal(
-                    recipients, subtract_fee_from_amount=is_max)
+                    recipients, subtract_fee_from_amount=is_max,
+                    domain_coins=domain_coins, min_privacy=min_privacy)
             except (UserFacingException, NotEnoughFunds) as e:
                 self.show_error(str(e))
                 return
@@ -669,7 +736,8 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
         def task():
             built = self.wallet.create_blsct_transaction(
                 recipients, password=password,
-                subtract_fee_from_amount=is_max)
+                subtract_fee_from_amount=is_max,
+                domain_coins=domain_coins, min_privacy=min_privacy)
             return built
 
         def on_success(built):
@@ -677,11 +745,13 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
             dest_str = (dest[:24] + '...' + dest[-8:]) if len(recipients) == 1 \
                 else _('{} recipients').format(len(recipients))
             amount_after_fee = total - (built.fee if is_max else 0)
-            if not self.question('\n'.join([
-                    _('Send {} to {}?').format(
-                        self.window.format_amount_and_units(amount_after_fee), dest_str),
-                    _('Fee: {}').format(self.window.format_amount_and_units(built.fee)),
-            ])):
+            lines = [
+                _('Send {} to {}?').format(
+                    self.window.format_amount_and_units(amount_after_fee), dest_str),
+                _('Fee: {}').format(self.window.format_amount_and_units(built.fee)),
+            ]
+            lines += self._blsct_privacy_lines(built, domain_coins)
+            if not self.question('\n'.join(lines)):
                 return
             self._broadcast_blsct(built)
 
@@ -694,6 +764,26 @@ class SendTab(QWidget, MessageBoxMixin, Logger):
 
         WaitingDialog(self, _('Creating transaction...'), task,
                       on_success=on_success, on_error=on_error)
+
+    def _blsct_privacy_lines(self, built, domain_coins) -> List[str]:
+        """Confirmation lines: the score our new outputs (change) will get,
+        and a warning for coin-control picks of mixed scores."""
+        from electrum.navio_blsct import parse_tx_hex
+        try:
+            inputs = [i.prevout_hash for i in parse_tx_hex(built.raw_hex).inputs]
+        except Exception:
+            return []
+        lines = []
+        mbits = self.wallet.privacy_score_for_inputs(inputs)
+        if mbits is None:
+            lines.append(_('Privacy of your change: unknown (some coins have no score yet)'))
+        else:
+            lines.append(_('Privacy of your change: {} bits').format(
+                blsct_privacy.format_bits(mbits)))
+        warning = domain_coins and self.wallet.privacy_mix_warning(domain_coins)
+        if warning:
+            lines += ['', warning]
+        return lines
 
     def _broadcast_blsct(self, built) -> None:
         def task():

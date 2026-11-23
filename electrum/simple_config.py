@@ -716,6 +716,15 @@ class SimpleConfig(Logger):
                             'same address; the other wallet pays the fee. The requester '
                             'learns that one specific coin is yours.'),
     )
+    # minimum privacy score (bits) for coins the send flows pick; 0 = off
+    BLSCT_MIN_PRIVACY = ConfigVar(
+        'blsct_min_privacy', default=0.0, type_=float,
+        short_desc=lambda: _('Minimum privacy'),
+        long_desc=lambda: _('Only spend coins whose privacy score is at least this many bits '
+                            '(coins without a score are skipped). Off (0) lets the wallet '
+                            'use any coin; it still prefers paying with coins of one score. '
+                            'Coins picked by hand with coin control are always used.'),
+    )
     # extra relays as "host:port" strings (mainnet seeds are always used)
     BLSCT_P2P_PEERS = ConfigVar('blsct_p2p_peers', default=None)
     # relays that worked before, kept between sessions

@@ -53,6 +53,7 @@ from electrum import (keystore, constants, util, bitcoin, commands,
                       lnutil)
 from electrum.bitcoin import COIN, is_address, DummyAddress
 from electrum.plugin import run_hook
+from electrum import blsct_privacy
 from electrum.i18n import _
 from electrum.util import (format_time, UserCancelled, profiler, bfh, InvalidPassword,
                            UserFacingException, get_new_wallet_name,
@@ -1176,6 +1177,9 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
                 _('Height') + ': ' + str(d.get('height')),
                 _('Amount') + ': ' + self.format_amount_and_units(d.get('amount') or 0),
                 _('Address') + ': ' + str(d.get('address')),
+                _('Privacy') + ': ' + (
+                    _('{} bits').format(blsct_privacy.format_bits(utxo.privacy_mbits))
+                    if utxo.privacy_mbits is not None else _('unknown')),
             ]
             if d.get('memo'):
                 parts.append(_('Memo') + ': ' + d['memo'])

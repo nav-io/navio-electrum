@@ -37,6 +37,7 @@ from electrum.transaction import PartialTxInput, PartialTxOutput
 from electrum.lnutil import MIN_FUNDING_SAT
 from electrum.util import profiler, coin_name, coin_txid
 from electrum.plugin import run_hook
+from electrum import blsct_privacy
 
 from .util import ColorScheme, MONOSPACE_FONT
 from .my_treeview import MyTreeView, MySortModel
@@ -45,6 +46,12 @@ from ..messages import MSG_FREEZE_ADDRESS, MSG_FREEZE_COIN
 
 if TYPE_CHECKING:
     from .main_window import ElectrumWindow
+
+
+PRIVACY_TOOLTIP = _(
+    'Privacy score (bits): about how many equally likely origins this coin has, '
+    'as log2. Received coins start at 0; aggregation with other wallets raises it. '
+    'A dash means unknown (synced before scores existed: rescan to fill it in).')
 
 
 class UTXOList(MyTreeView):
@@ -56,6 +63,7 @@ class UTXOList(MyTreeView):
         ADDRESS = enum.auto()
         LABEL = enum.auto()
         AMOUNT = enum.auto()
+        PRIVACY = enum.auto()
         PARENTS = enum.auto()
 
     headers = {
@@ -64,6 +72,7 @@ class UTXOList(MyTreeView):
         Columns.PARENTS: _('Parents'),
         Columns.LABEL: _('Label'),
         Columns.AMOUNT: _('Amount'),
+        Columns.PRIVACY: _('Privacy'),
     }
     filter_columns = [Columns.ADDRESS, Columns.LABEL, Columns.OUTPOINT]
     stretch_column = Columns.LABEL
@@ -109,7 +118,8 @@ class UTXOList(MyTreeView):
             return
         utxos = self.wallet.get_utxos()
         update_key = (tuple((coin_name(u), u.value_sats(), u.block_height,
-                             self.wallet.is_frozen_coin(u)) for u in utxos),
+                             self.wallet.is_frozen_coin(u), self._privacy_mbits(u))
+                            for u in utxos),
                       tuple(self.wallet.get_all_labels().items()),
                       # amount formatting settings (unit, decimal places)
                       self.main_window.format_amount(123456789, whitespaces=True))
@@ -131,6 +141,8 @@ class UTXOList(MyTreeView):
             labels[self.Columns.OUTPOINT] = str(utxo.short_id)
             labels[self.Columns.ADDRESS] = utxo.address
             labels[self.Columns.AMOUNT] = amount_str
+            mbits = self._privacy_mbits(utxo)
+            labels[self.Columns.PRIVACY] = blsct_privacy.format_bits(mbits)
             utxo_item = [QStandardItem(x) for x in labels]
             self.set_editability(utxo_item)
             utxo_item[self.Columns.OUTPOINT].setData(name, self.ROLE_PREVOUT_STR)
@@ -139,6 +151,12 @@ class UTXOList(MyTreeView):
             utxo_item[self.Columns.AMOUNT].setFont(QFont(MONOSPACE_FONT))
             utxo_item[self.Columns.PARENTS].setFont(QFont(MONOSPACE_FONT))
             utxo_item[self.Columns.OUTPOINT].setFont(QFont(MONOSPACE_FONT))
+            # unknown sorts below every score
+            utxo_item[self.Columns.PRIVACY].setData(
+                -1 if mbits is None else mbits, self.ROLE_SORT_ORDER)
+            utxo_item[self.Columns.PRIVACY].setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            utxo_item[self.Columns.PRIVACY].setToolTip(PRIVACY_TOOLTIP)
             self.std_model.insertRow(idx, utxo_item)
             self.refresh_row(name, idx)
         self.filter()
@@ -146,6 +164,10 @@ class UTXOList(MyTreeView):
         self.sortByColumn(self.Columns.OUTPOINT, Qt.SortOrder.DescendingOrder)
         self.update_coincontrol_bar()
         self.num_coins_label.setText(_('{} unspent transaction outputs').format(len(utxos)))
+
+    @staticmethod
+    def _privacy_mbits(utxo) -> Optional[int]:
+        return getattr(utxo, 'privacy_mbits', None)
 
     def update_coincontrol_bar(self):
         # update coincontrol status bar
@@ -155,9 +177,16 @@ class UTXOList(MyTreeView):
             amount = sum(x.value_sats() for x in coins)
             amount_str = self.main_window.format_amount_and_units(amount)
             num_outputs_str = _("{} outputs available ({} total)").format(len(coins), len(self._utxo_dict))
-            self.main_window.set_coincontrol_msg(_("Coin control active") + f': {num_outputs_str}, {amount_str}')
+            msg = _("Coin control active") + f': {num_outputs_str}, {amount_str}'
+            scores = [self._privacy_mbits(c) for c in coins]
+            if blsct_privacy.spread_exceeds(scores):
+                msg += '; ' + _('privacy scores differ by more than 1 bit')
+            self.main_window.set_coincontrol_msg(msg)
         else:
             self.main_window.set_coincontrol_msg(None)
+        send_tab = getattr(self.main_window, 'send_tab', None)
+        if send_tab is not None:
+            send_tab.update_min_privacy_info()
 
     def refresh_row(self, key, row):
         assert row is not None
@@ -180,9 +209,9 @@ class UTXOList(MyTreeView):
         else:
             tooltip = key
             color = self._default_bg_brush
-        for col in utxo_item:
+        for i, col in enumerate(utxo_item):
             col.setBackground(color)
-            col.setToolTip(tooltip)
+            col.setToolTip(PRIVACY_TOOLTIP if i == self.Columns.PRIVACY else tooltip)
         if self.wallet.is_frozen_address(utxo.address):
             utxo_item[self.Columns.ADDRESS].setBackground(ColorScheme.BLUE.as_color(True))
             utxo_item[self.Columns.ADDRESS].setToolTip(_('Address is frozen'))
